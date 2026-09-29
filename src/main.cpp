@@ -4,8 +4,8 @@
 #include <WiFi.h>
 #include <esp32-hal-bt.h>
 
-#include <PN532_I2C.h>
 #include <PN532.h>
+#include "PaperJamPN532I2C.h"
 
 #include "PaperJamConfig.h"
 
@@ -13,7 +13,7 @@ using namespace PaperJamConfig;
 
 M5EPD_Canvas canvas(&M5.EPD);
 TwoWire NFCWire(1);
-PN532_I2C pn532Interface(NFCWire);
+PaperJamPN532I2C pn532Interface(NFCWire, 0x24);
 PN532 nfc(pn532Interface);
 
 enum class Page {
@@ -414,7 +414,7 @@ static bool initPn532() {
     activeNfcScl = 26;
 
     if (!anyAck) {
-        // Some HW-147C clone boards have SDA/SCL labels/routing swapped.
+        // Some HW-147C variants may have SDA/SCL labels/routing swapped.
         serialLog("[i2c2] no ACK, trying SDA/SCL swapped");
         anyAck = configureAndProbeBus(26, 33, found24, found28);
         activeNfcSda = 26;
@@ -423,37 +423,39 @@ static bool initPn532() {
 
     nfcFoundAt28 = found28;
 
-    if (!found24) {
-        if (found28) {
-            nfcDiagnostic = "I2C 0x28 trovato: non e' un PN532 standard";
-            serialLog("[nfc] device ACK at 0x28, but standard PN532 address is 0x24");
-            serialLog("[nfc] HW-147C clone/alternate controller suspected");
-        } else {
-            nfcDiagnostic = "Nessun ACK I2C a 0x24/0x28";
-            serialLog("[nfc] no device at 0x24 or 0x28 on either pin orientation");
-        }
+    if (!found24 && !found28) {
+        nfcDiagnostic = "Nessun ACK I2C a 0x24/0x28";
+        serialLog("[nfc] no device at 0x24 or 0x28 on either pin orientation");
         return false;
     }
 
-    nfcDiagnostic = "PN532 a 0x24 trovato, inizializzazione...";
-    serialLog("[nfc] I2C ACK at standard PN532 address 0x24");
+    // Standard PN532 is 0x24. Some HW-147C boards ACK at 0x28.
+    // PaperJam uses a configurable-address transport so we can test whether
+    // the device at 0x28 still speaks the PN532 frame protocol.
+    uint8_t candidateAddress = found24 ? 0x24 : 0x28;
+    pn532Interface.setAddress(candidateAddress);
 
-    // The ESP32 I2C controller is already initialized on the selected pins.
-    // Seeed PN532_I2C::begin() will leave an already-started bus in place.
+    Serial.printf("[nfc] testing PN532 protocol at I2C 0x%02X\n", candidateAddress);
+    nfcDiagnostic = String("Test protocollo PN532 su 0x") + hex2(candidateAddress);
+
     nfc.begin();
     delay(40);
 
     uint32_t version = nfc.getFirmwareVersion();
     if (!version) {
-        // One extra wake-up/retry only; avoid long boot stalls.
         pn532Interface.wakeup();
-        delay(60);
+        delay(80);
         version = nfc.getFirmwareVersion();
     }
 
     if (!version) {
-        nfcDiagnostic = "0x24 risponde, ma comando PN532 fallisce";
-        serialLog("[nfc] address 0x24 ACKs but PN532 GetFirmwareVersion failed");
+        if (candidateAddress == 0x28) {
+            nfcDiagnostic = "0x28 risponde, protocollo PN532 non riconosciuto";
+            serialLog("[nfc] 0x28 ACKs, but PN532 GetFirmwareVersion failed");
+        } else {
+            nfcDiagnostic = "0x24 risponde, ma comando PN532 fallisce";
+            serialLog("[nfc] 0x24 ACKs, but PN532 GetFirmwareVersion failed");
+        }
         return false;
     }
 
@@ -461,12 +463,18 @@ static bool initPn532() {
     uint8_t fwMajor = (version >> 16) & 0xFF;
     uint8_t fwMinor = (version >> 8) & 0xFF;
 
-    Serial.printf("[nfc] PN5%02X firmware %u.%u on SDA=%d SCL=%d\n",
-                  ic, fwMajor, fwMinor, activeNfcSda, activeNfcScl);
+    Serial.printf("[nfc] PN5%02X firmware %u.%u at 0x%02X on SDA=%d SCL=%d\n",
+                  ic, fwMajor, fwMinor, candidateAddress,
+                  activeNfcSda, activeNfcScl);
 
-    nfc.SAMConfig();
+    if (!nfc.SAMConfig()) {
+        nfcDiagnostic = "Firmware letto, SAMConfig fallito";
+        serialLog("[nfc] firmware detected but SAMConfig failed");
+        return false;
+    }
+
     nfc.setPassiveActivationRetries(0x01);
-    nfcDiagnostic = "PN532 ready";
+    nfcDiagnostic = String("PN532 ready @ 0x") + hex2(candidateAddress);
     return true;
 }
 
