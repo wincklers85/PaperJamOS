@@ -14,10 +14,12 @@ constexpr int BTN_RIGHT_PIN = 37;
 constexpr int BTN_POWER_PIN = 38;
 constexpr int BTN_LEFT_PIN  = 39;
 
-// PN532 connected to M5Paper Port B and used as a second I2C bus.
-// User wiring: SDA = GPIO33, SCL = GPIO26.
+// NFC reader on M5Paper Port B using a second I2C bus.
+// Wiring: SDA = GPIO33, SCL = GPIO26.
+// Hardware reset uses GPIO18 (free Port C pin) for HW-147C / Si512-class boards.
 constexpr int NFC_SDA_PIN = 33;
 constexpr int NFC_SCL_PIN = 26;
+constexpr int NFC_RST_PIN = 18;
 constexpr uint32_t NFC_I2C_FREQ = 100000;
 
 constexpr uint32_t NFC_SCAN_INTERVAL_MS = 350;
