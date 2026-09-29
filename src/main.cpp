@@ -66,6 +66,19 @@ int activeNfcScl = NFC_SCL_PIN;
 String nfcDiagnostic = "Not tested";
 bool nfcFoundAt28 = false;
 
+struct RfDiagnostics {
+    uint8_t version = 0;
+    uint8_t txControl = 0;
+    uint8_t txAuto = 0;
+    uint8_t rfCfg = 0;
+    uint8_t errorReg = 0;
+    uint8_t comIrq = 0;
+    uint8_t bitFraming = 0;
+    int lastWupaStatus = -1;
+    uint32_t attempts = 0;
+    uint32_t responses = 0;
+} rfDiag;
+
 bool fingerWasDown = false;
 int touchStartX = 0;
 int touchStartY = 0;
@@ -332,13 +345,48 @@ static void renderNfc() {
     } else if (!lastCard.valid) {
         canvas.setTextColor(0);
         canvas.setTextSize(3);
-        canvas.drawString("Avvicina un tag", 93, 388);
+        canvas.drawString("Avvicina un tag", 93, 300);
         canvas.setTextSize(1);
         canvas.setTextColor(5);
-        canvas.drawString("Avvicina MIFARE / NTAG / ISO14443A", 96, 445);
-        canvas.drawCircle(270, 535, 56, 6);
-        canvas.drawCircle(270, 535, 38, 6);
-        canvas.drawCircle(270, 535, 20, 6);
+        canvas.drawString("MIFARE / NTAG / ISO14443A", 135, 350);
+
+        if (nfcBackend == NfcBackend::MFRC522Compat) {
+            char d[96];
+
+            canvas.setTextColor(0);
+            snprintf(d, sizeof(d), "Si512 VersionReg : 0x%02X", rfDiag.version);
+            canvas.drawString(d, 55, 410);
+
+            snprintf(d, sizeof(d), "TxControlReg     : 0x%02X  TX1/TX2=%s",
+                     rfDiag.txControl,
+                     ((rfDiag.txControl & 0x03) == 0x03) ? "ON" : "OFF");
+            canvas.drawString(d, 55, 445);
+
+            snprintf(d, sizeof(d), "TxAutoReg        : 0x%02X", rfDiag.txAuto);
+            canvas.drawString(d, 55, 480);
+
+            snprintf(d, sizeof(d), "RFCfgReg         : 0x%02X", rfDiag.rfCfg);
+            canvas.drawString(d, 55, 515);
+
+            snprintf(d, sizeof(d), "WUPA status      : %d", rfDiag.lastWupaStatus);
+            canvas.drawString(d, 55, 550);
+
+            snprintf(d, sizeof(d), "Error/IRQ        : %02X / %02X",
+                     rfDiag.errorReg, rfDiag.comIrq);
+            canvas.drawString(d, 55, 585);
+
+            snprintf(d, sizeof(d), "Tentativi/Risposte: %lu / %lu",
+                     (unsigned long)rfDiag.attempts,
+                     (unsigned long)rfDiag.responses);
+            canvas.drawString(d, 55, 620);
+
+            canvas.setTextColor(6);
+            canvas.drawString("Questa schermata serve a diagnosticare il campo RF.", 55, 665);
+        } else {
+            canvas.drawCircle(270, 535, 56, 6);
+            canvas.drawCircle(270, 535, 38, 6);
+            canvas.drawCircle(270, 535, 20, 6);
+        }
     } else {
         canvas.setTextColor(0);
         canvas.setTextSize(1);
@@ -570,6 +618,11 @@ static bool initSi512Native() {
     uint8_t txAuto = rc522Driver.PCD_ReadRegister(
         static_cast<MFRC522Constants::PCD_Register>(0x15));
     mode = rc522Driver.PCD_ReadRegister(MFRC522Constants::ModeReg);
+
+    rfDiag.version = version;
+    rfDiag.txControl = txControl;
+    rfDiag.txAuto = txAuto;
+    rfDiag.rfCfg = rfCfg;
 
     Serial.printf(
         "[si512] init: Mode=0x%02X TxControl=0x%02X TxAuto=0x%02X RFCfg=0x%02X\n",
@@ -860,19 +913,35 @@ static void scanRc522Compatible() {
     // after a previous successful read.
     MFRC522::StatusCode request = rc522.PICC_WakeupA(atqaBytes, &atqaSize);
 
+    rfDiag.attempts++;
+    rfDiag.lastWupaStatus = (int)request;
+    rfDiag.txControl = rc522Driver.PCD_ReadRegister(MFRC522Constants::TxControlReg);
+    rfDiag.txAuto = rc522Driver.PCD_ReadRegister(
+        static_cast<MFRC522Constants::PCD_Register>(0x15));
+    rfDiag.rfCfg = rc522Driver.PCD_ReadRegister(MFRC522Constants::RFCfgReg);
+    rfDiag.errorReg = rc522Driver.PCD_ReadRegister(MFRC522Constants::ErrorReg);
+    rfDiag.comIrq = rc522Driver.PCD_ReadRegister(MFRC522Constants::ComIrqReg);
+    rfDiag.bitFraming = rc522Driver.PCD_ReadRegister(MFRC522Constants::BitFramingReg);
+
     if (request != MFRC522Constants::STATUS_OK &&
         request != MFRC522Constants::STATUS_COLLISION) {
 
         if (millis() - lastRfDiag >= 2000) {
             lastRfDiag = millis();
-            uint8_t txControl = rc522Driver.PCD_ReadRegister(MFRC522Constants::TxControlReg);
-            uint8_t rfCfg = rc522Driver.PCD_ReadRegister(MFRC522Constants::RFCfgReg);
-            Serial.printf("[rf] no tag; WUPA status=%u TxControl=0x%02X RFCfg=0x%02X\n",
-                          (unsigned)request, txControl, rfCfg);
+            Serial.printf(
+                "[rf] no tag WUPA=%u TX=0x%02X TxAuto=0x%02X RF=0x%02X Error=0x%02X IRQ=0x%02X Frame=0x%02X\n",
+                (unsigned)request,
+                rfDiag.txControl, rfDiag.txAuto, rfDiag.rfCfg,
+                rfDiag.errorReg, rfDiag.comIrq, rfDiag.bitFraming);
+
+            if (currentPage == Page::NFC) {
+                fullRefresh();
+            }
         }
         return;
     }
 
+    rfDiag.responses++;
     Serial.printf("[rf] PICC response, ATQA=%02X %02X status=%u\n",
                   atqaBytes[0], atqaBytes[1], (unsigned)request);
 
