@@ -156,7 +156,7 @@ static String backendName() {
         case NfcBackend::PN532:
             return "PN532";
         case NfcBackend::MFRC522Compat:
-            return "Si512/MFRC522";
+            return "Si512";
         default:
             return "NFC";
     }
@@ -505,41 +505,110 @@ static bool tryPn532At(uint8_t address) {
     return true;
 }
 
-static bool tryRc522CompatibleAt28() {
-    serialLog("[nfc] testing Si512/MFRC522-compatible register protocol at 0x28");
-
-    // Wire1 has already been configured by configureAndProbeBus().
-    rc522.PCD_Init();
-    delay(12);
+static bool initSi512Native() {
+    // Si512 is MFRC522-like at command/FIFO level, but several configuration
+    // registers differ. In particular 0x15 is TxAutoReg on Si512, not TxASKReg.
+    // Do NOT call MFRC522::PCD_Init() here.
 
     uint8_t version = rc522Driver.PCD_ReadRegister(MFRC522Constants::VersionReg);
-    Serial.printf("[nfc] RC522-compatible VersionReg = 0x%02X\n", version);
+    Serial.printf("[si512] VersionReg = 0x%02X (expected Si512 = 0x82)\n", version);
 
-    if (version == 0x00 || version == 0xFF) {
-        serialLog("[nfc] MFRC522-compatible register test failed");
+    if (version != 0x82) {
+        Serial.printf("[si512] unexpected version 0x%02X; continuing cautiously\n", version);
+    }
+
+    // Software reset: CommandReg SoftReset = 0x0F.
+    rc522Driver.PCD_WriteRegister(MFRC522Constants::CommandReg, 0x0F);
+    delay(8);
+
+    // Wait for PowerDown bit to clear after reset, but never block boot.
+    for (uint8_t i = 0; i < 40; ++i) {
+        uint8_t cmd = rc522Driver.PCD_ReadRegister(MFRC522Constants::CommandReg);
+        if ((cmd & 0x10) == 0) break;
+        delay(2);
+    }
+
+    // ISO14443A / MIFARE 106 kbit/s.
+    rc522Driver.PCD_WriteRegister(MFRC522Constants::TxModeReg, 0x00);
+    rc522Driver.PCD_WriteRegister(MFRC522Constants::RxModeReg, 0x00);
+
+    // Si512 ModeReg differs slightly from MFRC522.
+    // Preserve the normal reader-mode defaults but select CRC-A preset 0x6363.
+    uint8_t mode = rc522Driver.PCD_ReadRegister(MFRC522Constants::ModeReg);
+    mode = (mode & 0xFC) | 0x01;
+    rc522Driver.PCD_WriteRegister(MFRC522Constants::ModeReg, mode);
+
+    // Standard 106 kbit modulation width.
+    rc522Driver.PCD_WriteRegister(MFRC522Constants::ModWidthReg, 0x26);
+
+    // Timer: roughly 25 ms communication timeout (same arithmetic as common
+    // MFRC522 reader setup and valid on Si512).
+    rc522Driver.PCD_WriteRegister(MFRC522Constants::TModeReg, 0x80);
+    rc522Driver.PCD_WriteRegister(MFRC522Constants::TPrescalerReg, 0xA9);
+    rc522Driver.PCD_WriteRegister(MFRC522Constants::TReloadRegH, 0x03);
+    rc522Driver.PCD_WriteRegister(MFRC522Constants::TReloadRegL, 0xE8);
+
+    // CRITICAL Si512 difference:
+    // 0x15 = TxAutoReg. Bit 6 forces 100% ASK modulation.
+    rc522Driver.PCD_WriteRegister(
+        static_cast<MFRC522Constants::PCD_Register>(0x15), 0x40);
+
+    // Enable both 13.56 MHz RF antenna drivers while preserving the
+    // board/chip-specific upper TxControl bits.
+    uint8_t txControl = rc522Driver.PCD_ReadRegister(MFRC522Constants::TxControlReg);
+    rc522Driver.PCD_WriteRegister(
+        MFRC522Constants::TxControlReg, (uint8_t)(txControl | 0x03));
+
+    // Keep the Si512 receiver's own reset/default RF tuning initially.
+    // The documented reset value is 0x48; forcing MFRC522 gain masks can
+    // alter Si512-specific RF-level fields, so don't do that here.
+    uint8_t rfCfg = rc522Driver.PCD_ReadRegister(MFRC522Constants::RFCfgReg);
+
+    delay(12);
+
+    txControl = rc522Driver.PCD_ReadRegister(MFRC522Constants::TxControlReg);
+    uint8_t txAuto = rc522Driver.PCD_ReadRegister(
+        static_cast<MFRC522Constants::PCD_Register>(0x15));
+    mode = rc522Driver.PCD_ReadRegister(MFRC522Constants::ModeReg);
+
+    Serial.printf(
+        "[si512] init: Mode=0x%02X TxControl=0x%02X TxAuto=0x%02X RFCfg=0x%02X\n",
+        mode, txControl, txAuto, rfCfg);
+
+    if ((txControl & 0x03) != 0x03) {
+        serialLog("[si512] ERROR: TX1/TX2 RF enable bits did not latch");
         return false;
     }
 
-    rc522.PCD_AntennaOff();
-    delay(5);
-    rc522.PCD_AntennaOn();
-    rc522.PCD_SetAntennaGain(MFRC522Constants::RxGain_max);
-    delay(10);
+    rc522.PCD_StopCrypto1();
+    return true;
+}
 
-    uint8_t txControl = rc522Driver.PCD_ReadRegister(MFRC522Constants::TxControlReg);
-    uint8_t rfCfg = rc522Driver.PCD_ReadRegister(MFRC522Constants::RFCfgReg);
-    Serial.printf("[nfc] TxControlReg=0x%02X RFCfgReg=0x%02X gain=0x%02X\n",
-                  txControl, rfCfg, rc522.PCD_GetAntennaGain());
+static bool tryRc522CompatibleAt28() {
+    serialLog("[nfc] testing native Si512 register protocol at 0x28");
 
-    if ((txControl & 0x03) != 0x03) {
-        rc522Driver.PCD_WriteRegister(MFRC522Constants::TxControlReg, txControl | 0x03);
-        delay(5);
-        txControl = rc522Driver.PCD_ReadRegister(MFRC522Constants::TxControlReg);
-        Serial.printf("[nfc] forced antenna ON, TxControlReg=0x%02X\n", txControl);
+    uint8_t version = rc522Driver.PCD_ReadRegister(MFRC522Constants::VersionReg);
+    Serial.printf("[nfc] VersionReg @0x28 = 0x%02X\n", version);
+
+    if (version == 0x00 || version == 0xFF) {
+        nfcDiagnostic = "0x28 ACK, ma registri NFC non leggibili";
+        serialLog("[nfc] register test failed");
+        return false;
+    }
+
+    if (!initSi512Native()) {
+        nfcDiagnostic = "Si512 trovato, inizializzazione RF fallita";
+        return false;
+    }
+
+    if (version == 0x82) {
+        nfcDiagnostic = "Si512 native ready @ 0x28";
+        serialLog("[nfc] Si512 confirmed by VersionReg 0x82");
+    } else {
+        nfcDiagnostic = String("Si512-like ready, version 0x") + hex2(version);
     }
 
     nfcBackend = NfcBackend::MFRC522Compat;
-    nfcDiagnostic = String("Si512/MFRC522 ready @ 0x28 v") + hex2(version);
     return true;
 }
 
