@@ -219,7 +219,7 @@ static void renderQuickSettings() {
     canvas.drawString("Quick Settings", 28, 88);
 
     drawToggle(28, 155, 484, 100, "NFC", nfcEnabled,
-               pn532Ready ? "PN532 Port C • G18/G19" : "PN532 non rilevato");
+               pn532Ready ? "PN532 Port B • G26/G33" : "PN532 non rilevato");
     drawToggle(28, 275, 484, 100, "Wi-Fi", wifiEnabled,
                wifiEnabled ? "Radio STA attiva" : "Radio disattivata");
     drawToggle(28, 395, 484, 100, "Bluetooth", btEnabled,
@@ -246,7 +246,7 @@ static void renderNfc() {
 
     canvas.setTextSize(1);
     canvas.setTextColor(6);
-    canvas.drawString("PN532 • I2C2 • SDA G19 • SCL G18 • 100 kHz", 30, 185);
+    canvas.drawString("PN532 • I2C2 • SDA G33 • SCL G26 • 100 kHz", 30, 185);
 
     canvas.fillRect(28, 228, 484, 520, 14);
     canvas.drawRect(28, 228, 484, 520, 7);
@@ -264,7 +264,7 @@ static void renderNfc() {
         canvas.drawString("PN532 non rilevato", 70, 400);
         canvas.setTextSize(1);
         canvas.setTextColor(5);
-        canvas.drawString("Controlla modalita I2C, 5V, GND, G18 e G19.", 63, 455);
+        canvas.drawString("Controlla modalita I2C, 5V, GND, G26 e G33.", 63, 455);
     } else if (!lastCard.valid) {
         canvas.setTextColor(0);
         canvas.setTextSize(3);
@@ -361,10 +361,29 @@ static void bootFrame(int percent, const String &message) {
     canvas.pushCanvas(0, 0, percent == 100 ? UPDATE_MODE_GC16 : UPDATE_MODE_DU4);
 }
 
+static uint8_t scanNfcI2cBus() {
+    uint8_t found = 0;
+    Serial.println("[i2c2] scanning Port B bus...");
+    for (uint8_t address = 1; address < 127; ++address) {
+        NFCWire.beginTransmission(address);
+        uint8_t error = NFCWire.endTransmission();
+        if (error == 0) {
+            Serial.printf("[i2c2] device found at 0x%02X\n", address);
+            ++found;
+        }
+    }
+    if (!found) {
+        Serial.println("[i2c2] no devices found on SDA=33 / SCL=26");
+    }
+    return found;
+}
+
 static bool initPn532() {
-    serialLog("[boot] NFC I2C2 begin SDA=19 SCL=18");
+    Serial.printf("[boot] NFC I2C2 begin SDA=%d SCL=%d\n", NFC_SDA_PIN, NFC_SCL_PIN);
     NFCWire.begin(NFC_SDA_PIN, NFC_SCL_PIN, NFC_I2C_FREQ);
-    delay(50);
+    delay(80);
+
+    scanNfcI2cBus();
 
     nfc.begin();
     uint32_t version = nfc.getFirmwareVersion();
