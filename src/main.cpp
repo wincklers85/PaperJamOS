@@ -13,6 +13,10 @@
 
 using namespace PaperJamConfig;
 
+// M5EPD grayscale: 0 is white, 15 is black on the first-generation panel.
+constexpr uint8_t UI_WHITE = 0;
+constexpr uint8_t UI_BLACK = 15;
+
 M5EPD_Canvas canvas(&M5.EPD);
 TwoWire NFCWire(1);
 PaperJamPN532I2C pn532Interface(NFCWire, 0x24);
@@ -79,6 +83,11 @@ struct RfDiagnostics {
     uint8_t adcBaseline = 0;
     uint8_t adcCurrent = 0;
     int adcDelta = 0;
+    uint8_t adcTxOff = 0;
+    uint8_t adcTxOn = 0;
+    int adcTxDelta = 0;
+    uint8_t statusTxOff = 0;
+    uint8_t statusTxOn = 0;
     int lastWupaStatus = -1;
     uint32_t attempts = 0;
     uint32_t responses = 0;
@@ -210,18 +219,18 @@ static void serialLog(const String &line) {
 }
 
 static void drawBattery(int x, int y, int pct) {
-    canvas.drawRect(x, y, 38, 19, 0);
-    canvas.fillRect(x + 38, y + 5, 4, 9, 0);
+    canvas.drawRect(x, y, 38, 19, UI_BLACK);
+    canvas.fillRect(x + 38, y + 5, 4, 9, UI_BLACK);
     int inner = map(constrain(pct, 0, 100), 0, 100, 0, 32);
-    if (inner > 0) canvas.fillRect(x + 3, y + 3, inner, 13, 0);
+    if (inner > 0) canvas.fillRect(x + 3, y + 3, inner, 13, UI_BLACK);
 }
 
 static void drawStatusBar() {
     canvas.fillRect(0, 0, SCREEN_W, STATUS_H, 15);
-    canvas.drawLine(0, STATUS_H - 2, SCREEN_W, STATUS_H - 2, 0);
-    canvas.drawLine(0, STATUS_H - 1, SCREEN_W, STATUS_H - 1, 0);
+    canvas.drawLine(0, STATUS_H - 2, SCREEN_W, STATUS_H - 2, UI_BLACK);
+    canvas.drawLine(0, STATUS_H - 1, SCREEN_W, STATUS_H - 1, UI_BLACK);
 
-    canvas.setTextColor(0);
+    canvas.setTextColor(UI_BLACK);
     canvas.setTextSize(2);
     canvas.drawString(timeString(), 18, 16);
 
@@ -240,39 +249,39 @@ static void drawStatusBar() {
 }
 
 static void drawFooterHint(const String &hint) {
-    canvas.drawLine(0, 900, SCREEN_W, 900, 0);
+    canvas.drawLine(0, 900, SCREEN_W, 900, UI_BLACK);
     canvas.setTextSize(1);
-    canvas.setTextColor(0);
+    canvas.setTextColor(UI_BLACK);
     canvas.drawString(String("PaperJam ") + PAPERJAM_VERSION, 18, 918);
     canvas.drawString(hint, 18, 944);
 }
 
 static void renderHome() {
-    canvas.fillCanvas(15);
+    canvas.fillCanvas(UI_WHITE);
     drawStatusBar();
 
-    canvas.setTextColor(0);
+    canvas.setTextColor(UI_BLACK);
     canvas.setTextSize(4);
     canvas.drawString("PaperJam OS", 28, 92);
 
     canvas.setTextSize(1);
-    canvas.setTextColor(0);
+    canvas.setTextColor(UI_BLACK);
     canvas.drawString(String("v") + PAPERJAM_VERSION + "  •  M5Paper first generation", 30, 142);
 
     // NFC app tile - terminal style, white background / black outline.
-    canvas.fillRect(30, 215, 300, 215, 15);
-    canvas.drawRect(30, 215, 300, 215, 0);
-    canvas.drawRoundRect(87, 252, 96, 96, 12, 0);
-    canvas.drawCircle(135, 300, 26, 0);
-    canvas.drawCircle(135, 300, 15, 0);
-    canvas.setTextColor(0);
+    canvas.fillRect(30, 215, 300, 215, UI_WHITE);
+    canvas.drawRect(30, 215, 300, 215, UI_BLACK);
+    canvas.drawRoundRect(87, 252, 96, 96, 12, UI_BLACK);
+    canvas.drawCircle(135, 300, 26, UI_BLACK);
+    canvas.drawCircle(135, 300, 15, UI_BLACK);
+    canvas.setTextColor(UI_BLACK);
     canvas.setTextSize(3);
     canvas.drawString("NFC", 94, 368);
     canvas.setTextSize(1);
-    canvas.setTextColor(0);
+    canvas.setTextColor(UI_BLACK);
     canvas.drawString(nfcReaderReady ? (backendName() + " ready") : "NFC reader not found", 58, 405);
 
-    canvas.setTextColor(0);
+    canvas.setTextColor(UI_BLACK);
     canvas.setTextSize(2);
     canvas.drawString("Applications", 30, 185);
 
@@ -280,23 +289,23 @@ static void renderHome() {
 }
 
 static void drawToggle(int x, int y, int w, int h, const String &name, bool on, const String &detail) {
-    canvas.fillRect(x, y, w, h, 15);
-    canvas.drawRect(x, y, w, h, 0);
-    canvas.setTextColor(0);
+    canvas.fillRect(x, y, w, h, UI_WHITE);
+    canvas.drawRect(x, y, w, h, UI_BLACK);
+    canvas.setTextColor(UI_BLACK);
     canvas.setTextSize(2);
     canvas.drawString(name, x + 18, y + 18);
     canvas.setTextSize(1);
-    canvas.setTextColor(0);
+    canvas.setTextColor(UI_BLACK);
     canvas.drawString(detail, x + 18, y + 55);
-    canvas.setTextColor(0);
+    canvas.setTextColor(UI_BLACK);
     canvas.drawString(on ? "ON" : "OFF", x + w - 58, y + 20);
 }
 
 static void renderQuickSettings() {
-    canvas.fillCanvas(15);
+    canvas.fillCanvas(UI_WHITE);
     drawStatusBar();
 
-    canvas.setTextColor(0);
+    canvas.setTextColor(UI_BLACK);
     canvas.setTextSize(3);
     canvas.drawString("Quick Settings", 28, 88);
 
@@ -309,7 +318,7 @@ static void renderQuickSettings() {
                btEnabled ? "Controller BT attivo" : "Radio disattivata");
 
     canvas.setTextSize(1);
-    canvas.setTextColor(0);
+    canvas.setTextColor(UI_BLACK);
     canvas.drawString("Tocca un modulo per attivarlo/disattivarlo.", 30, 545);
     canvas.drawString("Swipe up o tocca la status bar per chiudere.", 30, 575);
 
@@ -317,10 +326,10 @@ static void renderQuickSettings() {
 }
 
 static void renderNfc() {
-    canvas.fillCanvas(15);
+    canvas.fillCanvas(UI_WHITE);
     drawStatusBar();
 
-    canvas.setTextColor(0);
+    canvas.setTextColor(UI_BLACK);
     canvas.setTextSize(2);
     canvas.drawString("< HOME", 20, 78);
 
@@ -332,7 +341,7 @@ static void renderNfc() {
                       "  SCL:G" + activeNfcScl + "  RST:G" + NFC_RST_PIN,
                       26, 180);
 
-    canvas.drawLine(24, 210, 516, 210, 0);
+    canvas.drawLine(24, 210, 516, 210, UI_BLACK);
 
     if (!nfcEnabled) {
         canvas.setTextSize(3);
@@ -379,22 +388,28 @@ static void renderNfc() {
                      rfDiag.status1, rfDiag.status2);
             canvas.drawString(d, 38, 575);
 
-            snprintf(d, sizeof(d), "ADC BASE   %u", rfDiag.adcBaseline);
+            snprintf(d, sizeof(d), "RF OFF     ADC %u  S1 %02X",
+                     rfDiag.adcTxOff, rfDiag.statusTxOff);
             canvas.drawString(d, 38, 620);
 
-            snprintf(d, sizeof(d), "ADC NOW    %u", rfDiag.adcCurrent);
+            snprintf(d, sizeof(d), "RF ON      ADC %u  S1 %02X",
+                     rfDiag.adcTxOn, rfDiag.statusTxOn);
             canvas.drawString(d, 38, 665);
 
-            snprintf(d, sizeof(d), "ADC DELTA  %+d", rfDiag.adcDelta);
+            snprintf(d, sizeof(d), "TX DELTA   %+d", rfDiag.adcTxDelta);
             canvas.drawString(d, 38, 710);
+
+            snprintf(d, sizeof(d), "CARD ADC   %u  D%+d",
+                     rfDiag.adcCurrent, rfDiag.adcDelta);
+            canvas.drawString(d, 38, 755);
 
             snprintf(d, sizeof(d), "TRY/RESP   %lu / %lu",
                      (unsigned long)rfDiag.attempts,
                      (unsigned long)rfDiag.responses);
-            canvas.drawString(d, 38, 755);
+            canvas.drawString(d, 38, 800);
 
             canvas.setTextSize(1);
-            canvas.drawString("Put/remove card and watch ADC DELTA.", 38, 815);
+            canvas.drawString("RF OFF/ON self-test + card response diagnostics.", 38, 850);
         }
     } else {
         canvas.setTextSize(3);
@@ -441,8 +456,8 @@ static void fullRefresh() {
 }
 
 static void bootFrame(int percent, const String &message) {
-    canvas.fillCanvas(15);
-    canvas.setTextColor(0);
+    canvas.fillCanvas(UI_WHITE);
+    canvas.setTextColor(UI_BLACK);
 
     canvas.setTextSize(4);
     canvas.drawString("PAPERJAM OS", 48, 145);
@@ -450,9 +465,9 @@ static void bootFrame(int percent, const String &message) {
     canvas.setTextSize(2);
     canvas.drawString(String("VERSION ") + PAPERJAM_VERSION, 50, 215);
 
-    canvas.drawRect(50, 290, 440, 34, 0);
+    canvas.drawRect(50, 290, 440, 34, UI_BLACK);
     int fill = map(constrain(percent, 0, 100), 0, 100, 0, 432);
-    if (fill > 0) canvas.fillRect(54, 294, fill, 26, 0);
+    if (fill > 0) canvas.fillRect(54, 294, fill, 26, UI_BLACK);
 
     char p[16];
     snprintf(p, sizeof(p), "%3d%%", percent);
@@ -579,6 +594,33 @@ static bool tryPn532At(uint8_t address) {
     return true;
 }
 
+static void runSi512RfSoftwareSelfTest() {
+    uint8_t originalTx = rc522Driver.PCD_ReadRegister(MFRC522Constants::TxControlReg);
+
+    // Measure with both RF drivers disabled.
+    rc522Driver.PCD_WriteRegister(
+        MFRC522Constants::TxControlReg, (uint8_t)(originalTx & ~0x03));
+    delay(15);
+    rfDiag.statusTxOff = rc522Driver.PCD_ReadRegister(MFRC522Constants::Status1Reg);
+    rfDiag.adcTxOff = sampleSi512PollingAdc();
+
+    // Enable both RF drivers and measure again.
+    rc522Driver.PCD_WriteRegister(
+        MFRC522Constants::TxControlReg, (uint8_t)(originalTx | 0x03));
+    delay(15);
+    rfDiag.statusTxOn = rc522Driver.PCD_ReadRegister(MFRC522Constants::Status1Reg);
+    rfDiag.adcTxOn = sampleSi512PollingAdc();
+    rfDiag.adcTxDelta = (int)rfDiag.adcTxOn - (int)rfDiag.adcTxOff;
+
+    rfDiag.txControl = rc522Driver.PCD_ReadRegister(MFRC522Constants::TxControlReg);
+
+    Serial.printf(
+        "[si512] RF SELFTEST OFF: ADC=%u S1=%02X  ON: ADC=%u S1=%02X  DELTA=%d\n",
+        rfDiag.adcTxOff, rfDiag.statusTxOff,
+        rfDiag.adcTxOn, rfDiag.statusTxOn,
+        rfDiag.adcTxDelta);
+}
+
 static bool initSi512Native() {
     // Si512 is MFRC522-like at command/FIFO level, but several configuration
     // registers differ. In particular 0x15 is TxAutoReg on Si512, not TxASKReg.
@@ -670,6 +712,8 @@ static bool initSi512Native() {
 
     Serial.printf("[si512] software RF baseline ADC=%u Status1=0x%02X Status2=0x%02X\n",
                   rfDiag.adcBaseline, rfDiag.status1, rfDiag.status2);
+
+    runSi512RfSoftwareSelfTest();
     return true;
 }
 
@@ -1033,13 +1077,13 @@ static void scanNfc() {
 static void goToSleep() {
     serialLog("[power] sleep requested");
 
-    canvas.fillCanvas(15);
+    canvas.fillCanvas(UI_WHITE);
     drawStatusBar();
-    canvas.setTextColor(0);
+    canvas.setTextColor(UI_BLACK);
     canvas.setTextSize(4);
     canvas.drawString("Sleeping", 130, 390);
     canvas.setTextSize(1);
-    canvas.setTextColor(0);
+    canvas.setTextColor(UI_BLACK);
     canvas.drawString("Press the PWR button to wake PaperJam OS.", 98, 455);
     canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
 
