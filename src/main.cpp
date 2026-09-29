@@ -309,7 +309,7 @@ static void renderNfc() {
 
     canvas.setTextSize(1);
     canvas.setTextColor(6);
-    canvas.drawString(backendName() + String(" • I2C2 • SDA G") + activeNfcSda + " • SCL G" + activeNfcScl, 30, 185);
+    canvas.drawString(backendName() + String(" • SDA G") + activeNfcSda + " • SCL G" + activeNfcScl + " • RST G" + NFC_RST_PIN, 30, 185);
 
     canvas.fillRect(28, 228, 484, 520, 14);
     canvas.drawRect(28, 228, 484, 520, 7);
@@ -425,6 +425,15 @@ static void bootFrame(int percent, const String &message) {
     canvas.pushCanvas(0, 0, percent == 100 ? UPDATE_MODE_GC16 : UPDATE_MODE_DU4);
 }
 
+static void hardwareResetNfcReader() {
+    pinMode(NFC_RST_PIN, OUTPUT);
+    digitalWrite(NFC_RST_PIN, LOW);
+    delay(20);
+    digitalWrite(NFC_RST_PIN, HIGH);
+    delay(80);
+    Serial.printf("[nfc] hardware reset pulse on GPIO%d\n", NFC_RST_PIN);
+}
+
 static uint8_t probeI2cAddress(uint8_t address) {
     NFCWire.beginTransmission(address);
     return NFCWire.endTransmission();
@@ -536,6 +545,7 @@ static bool tryRc522CompatibleAt28() {
 
 static bool initNfcReader() {
     serialLog("[boot] NFC I2C auto-detect");
+    hardwareResetNfcReader();
     serialLog("[boot] Testing both Port B pin orientations");
 
     bool found24 = false;
