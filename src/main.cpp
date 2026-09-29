@@ -6,6 +6,8 @@
 
 #include <PN532.h>
 #include "PaperJamPN532I2C.h"
+#include <MFRC522v2.h>
+#include <MFRC522DriverI2C.h>
 
 #include "PaperJamConfig.h"
 
@@ -15,6 +17,26 @@ M5EPD_Canvas canvas(&M5.EPD);
 TwoWire NFCWire(1);
 PaperJamPN532I2C pn532Interface(NFCWire, 0x24);
 PN532 nfc(pn532Interface);
+
+// MFRC522v2 normally calls Wire.begin() inside its I2C driver.
+// PaperJam OS configures Wire1 itself on the M5Paper Port B pins, so keep it.
+class PaperJamMFRC522DriverI2C : public MFRC522DriverI2C {
+public:
+    PaperJamMFRC522DriverI2C(uint8_t address, TwoWire &wire)
+        : MFRC522DriverI2C(address, wire) {}
+    bool init() override { return true; }
+};
+
+PaperJamMFRC522DriverI2C rc522Driver(0x28, NFCWire);
+MFRC522 rc522(rc522Driver);
+
+enum class NfcBackend {
+    None,
+    PN532,
+    MFRC522Compat
+};
+
+NfcBackend nfcBackend = NfcBackend::None;
 
 enum class Page {
     Home,
@@ -38,7 +60,7 @@ Page pageBeforeQuickSettings = Page::Home;
 bool wifiEnabled = false;
 bool btEnabled = false;
 bool nfcEnabled = true;
-bool pn532Ready = false;
+bool nfcReaderReady = false;
 int activeNfcSda = NFC_SDA_PIN;
 int activeNfcScl = NFC_SCL_PIN;
 String nfcDiagnostic = "Not tested";
@@ -129,6 +151,42 @@ static String classifyIso14443A(uint16_t atqa, uint8_t sak, uint8_t uidLen) {
     return "ISO14443A tag";
 }
 
+static String backendName() {
+    switch (nfcBackend) {
+        case NfcBackend::PN532:
+            return "PN532";
+        case NfcBackend::MFRC522Compat:
+            return "Si512/MFRC522";
+        default:
+            return "NFC";
+    }
+}
+
+static String classifyRc522Type(MFRC522::PICC_Type type) {
+    switch (type) {
+        case MFRC522Constants::PICC_TYPE_MIFARE_MINI:
+            return "MIFARE Classic Mini";
+        case MFRC522Constants::PICC_TYPE_MIFARE_1K:
+            return "MIFARE Classic 1K";
+        case MFRC522Constants::PICC_TYPE_MIFARE_4K:
+            return "MIFARE Classic 4K";
+        case MFRC522Constants::PICC_TYPE_MIFARE_UL:
+            return "MIFARE Ultralight / NTAG";
+        case MFRC522Constants::PICC_TYPE_MIFARE_PLUS:
+            return "MIFARE Plus";
+        case MFRC522Constants::PICC_TYPE_MIFARE_DESFIRE:
+            return "MIFARE DESFire";
+        case MFRC522Constants::PICC_TYPE_ISO_14443_4:
+            return "ISO14443-4 Type A";
+        case MFRC522Constants::PICC_TYPE_ISO_18092:
+            return "ISO18092 / NFC";
+        case MFRC522Constants::PICC_TYPE_TNP3XXX:
+            return "TNP3XXX";
+        default:
+            return "ISO14443A tag";
+    }
+}
+
 static void serialLog(const String &line) {
     Serial.println(line);
 }
@@ -192,7 +250,7 @@ static void renderHome() {
     canvas.drawString("NFC", 94, 368);
     canvas.setTextSize(1);
     canvas.setTextColor(5);
-    canvas.drawString(pn532Ready ? "PN532 ready" : "PN532 not found", 72, 405);
+    canvas.drawString(nfcReaderReady ? (backendName() + " ready") : "NFC reader not found", 58, 405);
 
     canvas.setTextColor(0);
     canvas.setTextSize(2);
@@ -223,8 +281,8 @@ static void renderQuickSettings() {
     canvas.drawString("Quick Settings", 28, 88);
 
     drawToggle(28, 155, 484, 100, "NFC", nfcEnabled,
-               pn532Ready ? (String("PN532 I2C • SDA G") + activeNfcSda + " / SCL G" + activeNfcScl)
-                           : nfcDiagnostic);
+               nfcReaderReady ? (backendName() + String(" • SDA G") + activeNfcSda + " / SCL G" + activeNfcScl)
+                              : nfcDiagnostic);
     drawToggle(28, 275, 484, 100, "Wi-Fi", wifiEnabled,
                wifiEnabled ? "Radio STA attiva" : "Radio disattivata");
     drawToggle(28, 395, 484, 100, "Bluetooth", btEnabled,
@@ -251,7 +309,7 @@ static void renderNfc() {
 
     canvas.setTextSize(1);
     canvas.setTextColor(6);
-    canvas.drawString(String("PN532 • I2C2 • SDA G") + activeNfcSda + " • SCL G" + activeNfcScl + " • 100 kHz", 30, 185);
+    canvas.drawString(backendName() + String(" • I2C2 • SDA G") + activeNfcSda + " • SCL G" + activeNfcScl, 30, 185);
 
     canvas.fillRect(28, 228, 484, 520, 14);
     canvas.drawRect(28, 228, 484, 520, 7);
@@ -263,10 +321,10 @@ static void renderNfc() {
         canvas.setTextSize(1);
         canvas.setTextColor(5);
         canvas.drawString("Riattivalo dalla tendina Quick Settings.", 86, 470);
-    } else if (!pn532Ready) {
+    } else if (!nfcReaderReady) {
         canvas.setTextColor(0);
         canvas.setTextSize(3);
-        canvas.drawString("PN532 non rilevato", 70, 400);
+        canvas.drawString("Reader NFC non rilevato", 58, 400);
         canvas.setTextSize(1);
         canvas.setTextColor(5);
         canvas.drawString(nfcDiagnostic, 52, 455);
@@ -277,7 +335,7 @@ static void renderNfc() {
         canvas.drawString("Avvicina un tag", 93, 388);
         canvas.setTextSize(1);
         canvas.setTextColor(5);
-        canvas.drawString("ISO14443A / MIFARE / NTAG compatibili PN532", 74, 445);
+        canvas.drawString("Avvicina MIFARE / NTAG / ISO14443A", 96, 445);
         canvas.drawCircle(270, 535, 56, 6);
         canvas.drawCircle(270, 535, 38, 6);
         canvas.drawCircle(270, 535, 20, 6);
@@ -401,42 +459,9 @@ static bool configureAndProbeBus(int sda, int scl, bool &found24, bool &found28)
     return found24 || found28;
 }
 
-static bool initPn532() {
-    serialLog("[boot] PN532 fast I2C diagnostic");
-    serialLog("[boot] Testing both Port B pin orientations");
-
-    bool found24 = false;
-    bool found28 = false;
-
-    // First try the requested wiring: PN532 SDA -> G33, SCL -> G26.
-    bool anyAck = configureAndProbeBus(33, 26, found24, found28);
-    activeNfcSda = 33;
-    activeNfcScl = 26;
-
-    if (!anyAck) {
-        // Some HW-147C variants may have SDA/SCL labels/routing swapped.
-        serialLog("[i2c2] no ACK, trying SDA/SCL swapped");
-        anyAck = configureAndProbeBus(26, 33, found24, found28);
-        activeNfcSda = 26;
-        activeNfcScl = 33;
-    }
-
-    nfcFoundAt28 = found28;
-
-    if (!found24 && !found28) {
-        nfcDiagnostic = "Nessun ACK I2C a 0x24/0x28";
-        serialLog("[nfc] no device at 0x24 or 0x28 on either pin orientation");
-        return false;
-    }
-
-    // Standard PN532 is 0x24. Some HW-147C boards ACK at 0x28.
-    // PaperJam uses a configurable-address transport so we can test whether
-    // the device at 0x28 still speaks the PN532 frame protocol.
-    uint8_t candidateAddress = found24 ? 0x24 : 0x28;
-    pn532Interface.setAddress(candidateAddress);
-
-    Serial.printf("[nfc] testing PN532 protocol at I2C 0x%02X\n", candidateAddress);
-    nfcDiagnostic = String("Test protocollo PN532 su 0x") + hex2(candidateAddress);
+static bool tryPn532At(uint8_t address) {
+    pn532Interface.setAddress(address);
+    Serial.printf("[nfc] testing PN532 frame protocol at 0x%02X\n", address);
 
     nfc.begin();
     delay(40);
@@ -449,13 +474,7 @@ static bool initPn532() {
     }
 
     if (!version) {
-        if (candidateAddress == 0x28) {
-            nfcDiagnostic = "0x28 risponde, protocollo PN532 non riconosciuto";
-            serialLog("[nfc] 0x28 ACKs, but PN532 GetFirmwareVersion failed");
-        } else {
-            nfcDiagnostic = "0x24 risponde, ma comando PN532 fallisce";
-            serialLog("[nfc] 0x24 ACKs, but PN532 GetFirmwareVersion failed");
-        }
+        Serial.printf("[nfc] 0x%02X ACKs but PN532 GetFirmwareVersion failed\n", address);
         return false;
     }
 
@@ -463,19 +482,90 @@ static bool initPn532() {
     uint8_t fwMajor = (version >> 16) & 0xFF;
     uint8_t fwMinor = (version >> 8) & 0xFF;
 
-    Serial.printf("[nfc] PN5%02X firmware %u.%u at 0x%02X on SDA=%d SCL=%d\n",
-                  ic, fwMajor, fwMinor, candidateAddress,
-                  activeNfcSda, activeNfcScl);
+    Serial.printf("[nfc] PN5%02X firmware %u.%u at 0x%02X\n",
+                  ic, fwMajor, fwMinor, address);
 
     if (!nfc.SAMConfig()) {
-        nfcDiagnostic = "Firmware letto, SAMConfig fallito";
-        serialLog("[nfc] firmware detected but SAMConfig failed");
+        serialLog("[nfc] PN532 SAMConfig failed");
         return false;
     }
 
     nfc.setPassiveActivationRetries(0x01);
-    nfcDiagnostic = String("PN532 ready @ 0x") + hex2(candidateAddress);
+    nfcBackend = NfcBackend::PN532;
+    nfcDiagnostic = String("PN532 ready @ 0x") + hex2(address);
     return true;
+}
+
+static bool tryRc522CompatibleAt28() {
+    serialLog("[nfc] testing Si512/MFRC522-compatible register protocol at 0x28");
+
+    // Wire1 has already been configured by configureAndProbeBus().
+    rc522.PCD_Init();
+    delay(12);
+
+    uint8_t version = rc522Driver.PCD_ReadRegister(MFRC522Constants::VersionReg);
+    Serial.printf("[nfc] RC522-compatible VersionReg = 0x%02X\n", version);
+
+    if (version == 0x00 || version == 0xFF) {
+        serialLog("[nfc] MFRC522-compatible register test failed");
+        return false;
+    }
+
+    rc522.PCD_AntennaOn();
+    nfcBackend = NfcBackend::MFRC522Compat;
+    nfcDiagnostic = String("Si512/MFRC522 ready @ 0x28 v") + hex2(version);
+    return true;
+}
+
+static bool initNfcReader() {
+    serialLog("[boot] NFC I2C auto-detect");
+    serialLog("[boot] Testing both Port B pin orientations");
+
+    bool found24 = false;
+    bool found28 = false;
+
+    bool anyAck = configureAndProbeBus(33, 26, found24, found28);
+    activeNfcSda = 33;
+    activeNfcScl = 26;
+
+    if (!anyAck) {
+        serialLog("[i2c2] no ACK, trying SDA/SCL swapped");
+        anyAck = configureAndProbeBus(26, 33, found24, found28);
+        activeNfcSda = 26;
+        activeNfcScl = 33;
+    }
+
+    nfcFoundAt28 = found28;
+
+    if (!found24 && !found28) {
+        nfcDiagnostic = "Nessun ACK I2C a 0x24/0x28";
+        serialLog("[nfc] no known reader on I2C bus");
+        nfcBackend = NfcBackend::None;
+        return false;
+    }
+
+    // Native PN532 first when the standard address exists.
+    if (found24 && tryPn532At(0x24)) {
+        return true;
+    }
+
+    // Address 0x28 is characteristic of MFRC522/Si512-class I2C frontends.
+    // Try that register protocol before treating it as an unusual PN532.
+    if (found28 && tryRc522CompatibleAt28()) {
+        return true;
+    }
+
+    // Last compatibility test: a board could theoretically move PN532 frames
+    // to 0x28 while retaining the PN532 host protocol.
+    if (found28 && tryPn532At(0x28)) {
+        return true;
+    }
+
+    nfcBackend = NfcBackend::None;
+    nfcDiagnostic = found28
+        ? "0x28 risponde, ma driver Si512/PN532 falliscono"
+        : "0x24 risponde, ma protocollo PN532 fallisce";
+    return false;
 }
 
 static void setWifi(bool enabled) {
@@ -606,11 +696,37 @@ static void processTouch() {
     }
 }
 
-static void scanNfc() {
-    if (!nfcEnabled || !pn532Ready) return;
-    if (millis() - lastNfcScan < NFC_SCAN_INTERVAL_MS) return;
-    lastNfcScan = millis();
+static void publishCard(const uint8_t *uid, uint8_t uidLength,
+                        uint16_t atqa, uint8_t sak, const String &type) {
+    uint32_t hash = uidHash(uid, uidLength);
+    bool changed = !lastCard.valid || hash != lastUidHash ||
+                   lastCard.atqa != atqa || lastCard.sak != sak ||
+                   lastCard.type != type;
 
+    lastCard.valid = true;
+    lastCard.uidLength = min<uint8_t>(uidLength, sizeof(lastCard.uid));
+    memcpy(lastCard.uid, uid, lastCard.uidLength);
+    lastCard.atqa = atqa;
+    lastCard.sak = sak;
+    lastCard.type = type;
+    lastCard.seenAt = millis();
+    lastUidHash = hash;
+
+    Serial.println();
+    Serial.println("----- NFC TAG -----");
+    Serial.println("Backend: " + backendName());
+    Serial.println("Type   : " + type);
+    Serial.println("UID    : " + uidToString(uid, uidLength));
+    Serial.printf("ATQA   : 0x%04X\n", atqa);
+    Serial.printf("SAK    : 0x%02X\n", sak);
+    Serial.println("-------------------");
+
+    if (changed && currentPage == Page::NFC) {
+        fullRefresh();
+    }
+}
+
+static void scanPn532() {
     uint8_t uid[10] = {0};
     uint8_t uidLength = 0;
 
@@ -626,39 +742,64 @@ static void scanNfc() {
 
     uint8_t bufferLen = 0;
     uint8_t *raw = nfc.getBuffer(&bufferLen);
-
-    // Seeed PN532 readPassiveTargetID response:
-    // b0 tags, b1 target, b2..b3 ATQA/SENS_RES, b4 SAK, b5 UID length.
     uint16_t atqa = 0;
     uint8_t sak = 0;
+
     if (raw && bufferLen >= 6) {
         atqa = ((uint16_t)raw[2] << 8) | raw[3];
         sak = raw[4];
     }
 
-    uint32_t hash = uidHash(uid, uidLength);
-    bool changed = !lastCard.valid || hash != lastUidHash ||
-                   lastCard.atqa != atqa || lastCard.sak != sak;
+    publishCard(uid, uidLength, atqa, sak,
+                classifyIso14443A(atqa, sak, uidLength));
+}
 
-    lastCard.valid = true;
-    lastCard.uidLength = min<uint8_t>(uidLength, sizeof(lastCard.uid));
-    memcpy(lastCard.uid, uid, lastCard.uidLength);
-    lastCard.atqa = atqa;
-    lastCard.sak = sak;
-    lastCard.type = classifyIso14443A(atqa, sak, uidLength);
-    lastCard.seenAt = millis();
-    lastUidHash = hash;
+static void scanRc522Compatible() {
+    byte atqaBytes[2] = {0, 0};
+    byte atqaSize = sizeof(atqaBytes);
 
-    Serial.println();
-    Serial.println("----- NFC TAG -----");
-    Serial.println("Type: " + lastCard.type);
-    Serial.println("UID : " + uidToString(uid, uidLength));
-    Serial.printf("ATQA: 0x%04X\n", atqa);
-    Serial.printf("SAK : 0x%02X\n", sak);
-    Serial.println("-------------------");
+    MFRC522::StatusCode request = rc522.PICC_RequestA(atqaBytes, &atqaSize);
+    if (request != MFRC522Constants::STATUS_OK &&
+        request != MFRC522Constants::STATUS_COLLISION) {
+        return;
+    }
 
-    if (changed && currentPage == Page::NFC) {
-        fullRefresh();
+    if (!rc522.PICC_ReadCardSerial()) {
+        return;
+    }
+
+    uint8_t uidLength = min<uint8_t>(rc522.uid.size, 10);
+    uint8_t uid[10] = {0};
+    memcpy(uid, rc522.uid.uidByte, uidLength);
+
+    uint16_t atqa = 0;
+    if (atqaSize >= 2) {
+        atqa = ((uint16_t)atqaBytes[0] << 8) | atqaBytes[1];
+    }
+
+    uint8_t sak = rc522.uid.sak;
+    MFRC522::PICC_Type piccType = rc522.PICC_GetType(sak);
+
+    publishCard(uid, uidLength, atqa, sak, classifyRc522Type(piccType));
+
+    rc522.PICC_HaltA();
+    rc522.PCD_StopCrypto1();
+}
+
+static void scanNfc() {
+    if (!nfcEnabled || !nfcReaderReady) return;
+    if (millis() - lastNfcScan < NFC_SCAN_INTERVAL_MS) return;
+    lastNfcScan = millis();
+
+    switch (nfcBackend) {
+        case NfcBackend::PN532:
+            scanPn532();
+            break;
+        case NfcBackend::MFRC522Compat:
+            scanRc522Compatible();
+            break;
+        default:
+            break;
     }
 }
 
@@ -714,9 +855,9 @@ void setup() {
     bootFrame(52, "radios safe state");
     delay(100);
 
-    pn532Ready = initPn532();
+    nfcReaderReady = initNfcReader();
 
-    bootFrame(74, pn532Ready ? "PN532 NFC detected" : "PN532 unavailable");
+    bootFrame(74, nfcReaderReady ? (backendName() + " detected") : "NFC reader unavailable");
     delay(120);
     bootFrame(88, "PaperJam UI services");
     delay(120);
