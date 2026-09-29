@@ -39,6 +39,10 @@ bool wifiEnabled = false;
 bool btEnabled = false;
 bool nfcEnabled = true;
 bool pn532Ready = false;
+int activeNfcSda = NFC_SDA_PIN;
+int activeNfcScl = NFC_SCL_PIN;
+String nfcDiagnostic = "Not tested";
+bool nfcFoundAt28 = false;
 
 bool fingerWasDown = false;
 int touchStartX = 0;
@@ -219,7 +223,8 @@ static void renderQuickSettings() {
     canvas.drawString("Quick Settings", 28, 88);
 
     drawToggle(28, 155, 484, 100, "NFC", nfcEnabled,
-               pn532Ready ? "PN532 Port B • G26/G33" : "PN532 non rilevato");
+               pn532Ready ? (String("PN532 I2C • SDA G") + activeNfcSda + " / SCL G" + activeNfcScl)
+                           : nfcDiagnostic);
     drawToggle(28, 275, 484, 100, "Wi-Fi", wifiEnabled,
                wifiEnabled ? "Radio STA attiva" : "Radio disattivata");
     drawToggle(28, 395, 484, 100, "Bluetooth", btEnabled,
@@ -246,7 +251,7 @@ static void renderNfc() {
 
     canvas.setTextSize(1);
     canvas.setTextColor(6);
-    canvas.drawString("PN532 • I2C2 • SDA G33 • SCL G26 • 100 kHz", 30, 185);
+    canvas.drawString(String("PN532 • I2C2 • SDA G") + activeNfcSda + " • SCL G" + activeNfcScl + " • 100 kHz", 30, 185);
 
     canvas.fillRect(28, 228, 484, 520, 14);
     canvas.drawRect(28, 228, 484, 520, 7);
@@ -264,7 +269,8 @@ static void renderNfc() {
         canvas.drawString("PN532 non rilevato", 70, 400);
         canvas.setTextSize(1);
         canvas.setTextColor(5);
-        canvas.drawString("Controlla modalita I2C, 5V, GND, G26 e G33.", 63, 455);
+        canvas.drawString(nfcDiagnostic, 52, 455);
+        canvas.drawString("Vedi Serial Monitor 115200 per il test dettagliato.", 52, 488);
     } else if (!lastCard.valid) {
         canvas.setTextColor(0);
         canvas.setTextSize(3);
@@ -361,34 +367,112 @@ static void bootFrame(int percent, const String &message) {
     canvas.pushCanvas(0, 0, percent == 100 ? UPDATE_MODE_GC16 : UPDATE_MODE_DU4);
 }
 
-static uint8_t scanNfcI2cBus() {
-    uint8_t found = 0;
-    Serial.println("[i2c2] scanning Port B bus...");
-    for (uint8_t address = 1; address < 127; ++address) {
-        NFCWire.beginTransmission(address);
-        uint8_t error = NFCWire.endTransmission();
-        if (error == 0) {
-            Serial.printf("[i2c2] device found at 0x%02X\n", address);
-            ++found;
-        }
+static uint8_t probeI2cAddress(uint8_t address) {
+    NFCWire.beginTransmission(address);
+    return NFCWire.endTransmission();
+}
+
+static bool configureAndProbeBus(int sda, int scl, bool &found24, bool &found28) {
+    NFCWire.end();
+    delay(10);
+
+    if (!NFCWire.begin(sda, scl, NFC_I2C_FREQ)) {
+        Serial.printf("[i2c2] failed to start SDA=%d SCL=%d\n", sda, scl);
+        found24 = false;
+        found28 = false;
+        return false;
     }
-    if (!found) {
-        Serial.println("[i2c2] no devices found on SDA=33 / SCL=26");
-    }
-    return found;
+
+    NFCWire.setTimeOut(20);
+    NFCWire.setClock(NFC_I2C_FREQ);
+    delay(30);
+
+    uint8_t e24 = probeI2cAddress(0x24);
+    uint8_t e28 = probeI2cAddress(0x28);
+
+    found24 = (e24 == 0);
+    found28 = (e28 == 0);
+
+    Serial.printf("[i2c2] SDA=%d SCL=%d -> 0x24:%s 0x28:%s\n",
+                  sda, scl,
+                  found24 ? "ACK" : "no",
+                  found28 ? "ACK" : "no");
+
+    return found24 || found28;
 }
 
 static bool initPn532() {
-    Serial.printf("[boot] NFC I2C2 begin SDA=%d SCL=%d\n", NFC_SDA_PIN, NFC_SCL_PIN);
-    NFCWire.begin(NFC_SDA_PIN, NFC_SCL_PIN, NFC_I2C_FREQ);
-    delay(80);
+    serialLog("[boot] PN532 fast I2C diagnostic");
+    serialLog("[boot] Testing both Port B pin orientations");
 
-    scanNfcI2cBus();
+    bool found24 = false;
+    bool found28 = false;
 
+    // First try the physical mapping requested by the user:
+    // PN532 SDA -> G33, PN532 SCL -> G26.
+    configureAndProbeBus(33, 26, found24, found28);
+
+    if (!found24 && !found28) {
+        // Some HW-147C clone boards have SDA/SCL silkscreen or routing swapped.
+        serialLog("[i2c2] no ACK, trying SDA/SCL swapped");
+        configureAndProbeBus(26, 33, found24, found28);
+    }
+
+    activeNfcSda = found24 || found28 ? (found24 || found28 ? 
+                   ((probeI2cAddress(0x24) == 0 || probeI2cAddress(0x28) == 0) ? 0 : 0) : 0) : NFC_SDA_PIN;
+
+    // Determine which orientation is currently active without rescanning all addresses.
+    // configureAndProbeBus leaves the last tested bus active.
+    // If the first orientation worked, retry it explicitly so the state is unambiguous.
+    bool first24 = false, first28 = false;
+    configureAndProbeBus(33, 26, first24, first28);
+    if (first24 || first28) {
+        activeNfcSda = 33;
+        activeNfcScl = 26;
+        found24 = first24;
+        found28 = first28;
+    } else {
+        bool swap24 = false, swap28 = false;
+        configureAndProbeBus(26, 33, swap24, swap28);
+        activeNfcSda = 26;
+        activeNfcScl = 33;
+        found24 = swap24;
+        found28 = swap28;
+    }
+
+    nfcFoundAt28 = found28;
+
+    if (!found24) {
+        if (found28) {
+            nfcDiagnostic = "I2C 0x28 trovato: non e' un PN532 standard";
+            serialLog("[nfc] device ACK at 0x28, but standard PN532 address is 0x24");
+            serialLog("[nfc] HW-147C clone/alternate controller suspected");
+        } else {
+            nfcDiagnostic = "Nessun ACK I2C a 0x24/0x28";
+            serialLog("[nfc] no device at 0x24 or 0x28 on either pin orientation");
+        }
+        return false;
+    }
+
+    nfcDiagnostic = "PN532 a 0x24 trovato, inizializzazione...";
+    serialLog("[nfc] I2C ACK at standard PN532 address 0x24");
+
+    // The bus is already configured on the selected pins. The Seeed begin()
+    // sees the ESP32 I2C controller already initialized and leaves those pins in use.
     nfc.begin();
+    delay(40);
+
     uint32_t version = nfc.getFirmwareVersion();
     if (!version) {
-        serialLog("[nfc] PN532 not found");
+        // One extra wake-up/retry only; no long boot stall.
+        pn532Interface.wakeup();
+        delay(60);
+        version = nfc.getFirmwareVersion();
+    }
+
+    if (!version) {
+        nfcDiagnostic = "0x24 risponde, ma comando PN532 fallisce";
+        serialLog("[nfc] address 0x24 ACKs but PN532 GetFirmwareVersion failed");
         return false;
     }
 
@@ -396,10 +480,12 @@ static bool initPn532() {
     uint8_t fwMajor = (version >> 16) & 0xFF;
     uint8_t fwMinor = (version >> 8) & 0xFF;
 
-    Serial.printf("[nfc] PN5%02X firmware %u.%u\n", ic, fwMajor, fwMinor);
+    Serial.printf("[nfc] PN5%02X firmware %u.%u on SDA=%d SCL=%d\n",
+                  ic, fwMajor, fwMinor, activeNfcSda, activeNfcScl);
 
     nfc.SAMConfig();
     nfc.setPassiveActivationRetries(0x01);
+    nfcDiagnostic = "PN532 ready";
     return true;
 }
 
