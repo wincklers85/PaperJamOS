@@ -1,7 +1,7 @@
 #pragma once
 
 #ifndef PAPERJAM_VERSION
-#define PAPERJAM_VERSION "0.0.1-alpha"
+#define PAPERJAM_VERSION "0.0.2-alpha-rfdiag"
 #endif
 
 namespace PaperJamConfig {
