@@ -74,6 +74,11 @@ struct RfDiagnostics {
     uint8_t errorReg = 0;
     uint8_t comIrq = 0;
     uint8_t bitFraming = 0;
+    uint8_t status1 = 0;
+    uint8_t status2 = 0;
+    uint8_t adcBaseline = 0;
+    uint8_t adcCurrent = 0;
+    int adcDelta = 0;
     int lastWupaStatus = -1;
     uint32_t attempts = 0;
     uint32_t responses = 0;
@@ -354,34 +359,38 @@ static void renderNfc() {
             char d[96];
 
             canvas.setTextColor(0);
-            snprintf(d, sizeof(d), "Si512 VersionReg : 0x%02X", rfDiag.version);
-            canvas.drawString(d, 55, 410);
-
-            snprintf(d, sizeof(d), "TxControlReg     : 0x%02X  TX1/TX2=%s",
-                     rfDiag.txControl,
+            snprintf(d, sizeof(d), "Si512: 0x%02X   TX:0x%02X %s",
+                     rfDiag.version, rfDiag.txControl,
                      ((rfDiag.txControl & 0x03) == 0x03) ? "ON" : "OFF");
-            canvas.drawString(d, 55, 445);
+            canvas.drawString(d, 55, 400);
 
-            snprintf(d, sizeof(d), "TxAutoReg        : 0x%02X", rfDiag.txAuto);
-            canvas.drawString(d, 55, 480);
+            snprintf(d, sizeof(d), "RFCfg:0x%02X  RxGain: MAX (48dB)", rfDiag.rfCfg);
+            canvas.drawString(d, 55, 435);
 
-            snprintf(d, sizeof(d), "RFCfgReg         : 0x%02X", rfDiag.rfCfg);
-            canvas.drawString(d, 55, 515);
+            snprintf(d, sizeof(d), "WUPA:%d   Error/IRQ:%02X/%02X",
+                     rfDiag.lastWupaStatus, rfDiag.errorReg, rfDiag.comIrq);
+            canvas.drawString(d, 55, 470);
 
-            snprintf(d, sizeof(d), "WUPA status      : %d", rfDiag.lastWupaStatus);
-            canvas.drawString(d, 55, 550);
+            snprintf(d, sizeof(d), "Status1/2: %02X / %02X",
+                     rfDiag.status1, rfDiag.status2);
+            canvas.drawString(d, 55, 505);
 
-            snprintf(d, sizeof(d), "Error/IRQ        : %02X / %02X",
-                     rfDiag.errorReg, rfDiag.comIrq);
-            canvas.drawString(d, 55, 585);
+            snprintf(d, sizeof(d), "RF ADC baseline : %u", rfDiag.adcBaseline);
+            canvas.drawString(d, 55, 540);
+
+            snprintf(d, sizeof(d), "RF ADC corrente : %u", rfDiag.adcCurrent);
+            canvas.drawString(d, 55, 575);
+
+            snprintf(d, sizeof(d), "RF ADC delta    : %+d", rfDiag.adcDelta);
+            canvas.drawString(d, 55, 610);
 
             snprintf(d, sizeof(d), "Tentativi/Risposte: %lu / %lu",
                      (unsigned long)rfDiag.attempts,
                      (unsigned long)rfDiag.responses);
-            canvas.drawString(d, 55, 620);
+            canvas.drawString(d, 55, 645);
 
             canvas.setTextColor(6);
-            canvas.drawString("Questa schermata serve a diagnosticare il campo RF.", 55, 665);
+            canvas.drawString("Appoggia/togli la card: guarda se ADC/delta cambia.", 55, 685);
         } else {
             canvas.drawCircle(270, 535, 56, 6);
             canvas.drawCircle(270, 535, 38, 6);
@@ -480,6 +489,37 @@ static void hardwareResetNfcReader() {
     digitalWrite(NFC_RST_PIN, HIGH);
     delay(80);
     Serial.printf("[nfc] hardware reset pulse on GPIO%d\n", NFC_RST_PIN);
+}
+
+static uint8_t readSi512BankF(uint8_t bankIndex) {
+    // Si512 extended 0F_A..0F_P registers are selected through PageReg:
+    // bit6=RegbankSelect, bits5..2=bank A..P, then access register 0x0F.
+    uint8_t savedPage = rc522Driver.PCD_ReadRegister(
+        static_cast<MFRC522Constants::PCD_Register>(0x00));
+
+    uint8_t select = (uint8_t)(0x40 | ((bankIndex & 0x0F) << 2));
+    rc522Driver.PCD_WriteRegister(
+        static_cast<MFRC522Constants::PCD_Register>(0x00), select);
+
+    uint8_t value = rc522Driver.PCD_ReadRegister(
+        static_cast<MFRC522Constants::PCD_Register>(0x0F));
+
+    rc522Driver.PCD_WriteRegister(
+        static_cast<MFRC522Constants::PCD_Register>(0x00), savedPage);
+    return value;
+}
+
+static uint8_t sampleSi512PollingAdc() {
+    // Datasheet RF reference acquisition sequence:
+    // ADC_EXECUTE (0x06), wait >100 us, ADC_EXECUTE again, read 0F_G (ADCVal).
+    rc522Driver.PCD_WriteRegister(MFRC522Constants::CommandReg, 0x06);
+    delayMicroseconds(300);
+    rc522Driver.PCD_WriteRegister(MFRC522Constants::CommandReg, 0x06);
+    delayMicroseconds(500);
+
+    uint8_t value = readSi512BankF(6) & 0x7F; // G = index 6, ADCVal[6:0]
+    rc522Driver.PCD_WriteRegister(MFRC522Constants::CommandReg, 0x00);
+    return value;
 }
 
 static uint8_t probeI2cAddress(uint8_t address) {
@@ -607,10 +647,11 @@ static bool initSi512Native() {
     rc522Driver.PCD_WriteRegister(
         MFRC522Constants::TxControlReg, (uint8_t)(txControl | 0x03));
 
-    // Keep the Si512 receiver's own reset/default RF tuning initially.
-    // The documented reset value is 0x48; forcing MFRC522 gain masks can
-    // alter Si512-specific RF-level fields, so don't do that here.
+    // Si512 RFCfgReg: bits 6..4 are RxGain (111 = 48 dB max),
+    // keep bit7 RFLevelAmp and the low RFLevel nibble unchanged.
     uint8_t rfCfg = rc522Driver.PCD_ReadRegister(MFRC522Constants::RFCfgReg);
+    rfCfg = (uint8_t)((rfCfg & 0x8F) | 0x70);
+    rc522Driver.PCD_WriteRegister(MFRC522Constants::RFCfgReg, rfCfg);
 
     delay(12);
 
@@ -634,6 +675,15 @@ static bool initSi512Native() {
     }
 
     rc522.PCD_StopCrypto1();
+
+    rfDiag.status1 = rc522Driver.PCD_ReadRegister(MFRC522Constants::Status1Reg);
+    rfDiag.status2 = rc522Driver.PCD_ReadRegister(MFRC522Constants::Status2Reg);
+    rfDiag.adcBaseline = sampleSi512PollingAdc();
+    rfDiag.adcCurrent = rfDiag.adcBaseline;
+    rfDiag.adcDelta = 0;
+
+    Serial.printf("[si512] software RF baseline ADC=%u Status1=0x%02X Status2=0x%02X\n",
+                  rfDiag.adcBaseline, rfDiag.status1, rfDiag.status2);
     return true;
 }
 
@@ -928,11 +978,19 @@ static void scanRc522Compatible() {
 
         if (millis() - lastRfDiag >= 2000) {
             lastRfDiag = millis();
+
+            rfDiag.status1 = rc522Driver.PCD_ReadRegister(MFRC522Constants::Status1Reg);
+            rfDiag.status2 = rc522Driver.PCD_ReadRegister(MFRC522Constants::Status2Reg);
+            rfDiag.adcCurrent = sampleSi512PollingAdc();
+            rfDiag.adcDelta = (int)rfDiag.adcCurrent - (int)rfDiag.adcBaseline;
+
             Serial.printf(
-                "[rf] no tag WUPA=%u TX=0x%02X TxAuto=0x%02X RF=0x%02X Error=0x%02X IRQ=0x%02X Frame=0x%02X\n",
+                "[rf] no tag WUPA=%u TX=0x%02X TxAuto=0x%02X RF=0x%02X Error=0x%02X IRQ=0x%02X Frame=0x%02X ADC=%u delta=%d S1=%02X S2=%02X\n",
                 (unsigned)request,
                 rfDiag.txControl, rfDiag.txAuto, rfDiag.rfCfg,
-                rfDiag.errorReg, rfDiag.comIrq, rfDiag.bitFraming);
+                rfDiag.errorReg, rfDiag.comIrq, rfDiag.bitFraming,
+                rfDiag.adcCurrent, rfDiag.adcDelta,
+                rfDiag.status1, rfDiag.status2);
 
             if (currentPage == Page::NFC) {
                 fullRefresh();
