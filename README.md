@@ -47,20 +47,20 @@ Pin hardware M5Paper usati dal progetto:
 | Tasto centrale / PWR | 38 |
 | Tasto sinistro | 39 |
 
-## PN532 su Port C
+## PN532 su Port B
 
 Cablaggio richiesto:
 
-| PN532 | M5Paper Port C |
+| PN532 | M5Paper Port B |
 |---|---|
 | GND | GND |
 | VCC | 5V |
-| SCL | GPIO 18 |
-| SDA | GPIO 19 |
+| SCL | GPIO 26 |
+| SDA | GPIO 33 |
 
-> Nota: sul M5Paper il Port C nasce come porta UART (G18/G19). PaperJam OS lo riutilizza volutamente come **secondo bus I²C hardware** per il PN532. Il bus I²C interno dell'M5Paper resta separato, così touch, RTC ed EEPROM non vengono disturbati.
+> Nota: in questa revisione di prova il PN532 è collegato al **Port B** e usa un **secondo bus I²C hardware** con SDA su GPIO33 e SCL su GPIO26. Il bus I²C interno dell'M5Paper resta separato, così touch, RTC ed EEPROM non vengono disturbati.
 
-Il modulo PN532 deve essere configurato in **modalità I²C** tramite i relativi switch/jumper.
+Il modulo PN532 deve essere configurato in **modalità I²C** tramite i relativi switch/jumper. Al boot PaperJam OS esegue anche una scansione del bus I²C2 e stampa sul Serial Monitor gli indirizzi trovati, utile per diagnosticare il collegamento.
 
 ## Compilazione con PlatformIO
 
