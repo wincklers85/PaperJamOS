@@ -218,7 +218,8 @@ static void drawBattery(int x, int y, int pct) {
 
 static void drawStatusBar() {
     canvas.fillRect(0, 0, SCREEN_W, STATUS_H, 15);
-    canvas.drawLine(0, STATUS_H - 1, SCREEN_W, STATUS_H - 1, 8);
+    canvas.drawLine(0, STATUS_H - 2, SCREEN_W, STATUS_H - 2, 0);
+    canvas.drawLine(0, STATUS_H - 1, SCREEN_W, STATUS_H - 1, 0);
 
     canvas.setTextColor(0);
     canvas.setTextSize(2);
@@ -239,10 +240,11 @@ static void drawStatusBar() {
 }
 
 static void drawFooterHint(const String &hint) {
-    canvas.drawLine(0, 905, SCREEN_W, 905, 12);
+    canvas.drawLine(0, 900, SCREEN_W, 900, 0);
     canvas.setTextSize(1);
-    canvas.setTextColor(5);
-    canvas.drawString(hint, 20, 925);
+    canvas.setTextColor(0);
+    canvas.drawString(String("PaperJam ") + PAPERJAM_VERSION, 18, 918);
+    canvas.drawString(hint, 18, 944);
 }
 
 static void renderHome() {
@@ -254,12 +256,12 @@ static void renderHome() {
     canvas.drawString("PaperJam OS", 28, 92);
 
     canvas.setTextSize(1);
-    canvas.setTextColor(6);
+    canvas.setTextColor(0);
     canvas.drawString(String("v") + PAPERJAM_VERSION + "  •  M5Paper first generation", 30, 142);
 
-    // NFC app tile.
-    canvas.fillRect(30, 215, 210, 215, 14);
-    canvas.drawRect(30, 215, 210, 215, 6);
+    // NFC app tile - terminal style, white background / black outline.
+    canvas.fillRect(30, 215, 300, 215, 15);
+    canvas.drawRect(30, 215, 300, 215, 0);
     canvas.drawRoundRect(87, 252, 96, 96, 12, 0);
     canvas.drawCircle(135, 300, 26, 0);
     canvas.drawCircle(135, 300, 15, 0);
@@ -267,7 +269,7 @@ static void renderHome() {
     canvas.setTextSize(3);
     canvas.drawString("NFC", 94, 368);
     canvas.setTextSize(1);
-    canvas.setTextColor(5);
+    canvas.setTextColor(0);
     canvas.drawString(nfcReaderReady ? (backendName() + " ready") : "NFC reader not found", 58, 405);
 
     canvas.setTextColor(0);
@@ -278,13 +280,13 @@ static void renderHome() {
 }
 
 static void drawToggle(int x, int y, int w, int h, const String &name, bool on, const String &detail) {
-    canvas.fillRect(x, y, w, h, on ? 12 : 15);
-    canvas.drawRect(x, y, w, h, 6);
+    canvas.fillRect(x, y, w, h, 15);
+    canvas.drawRect(x, y, w, h, 0);
     canvas.setTextColor(0);
     canvas.setTextSize(2);
     canvas.drawString(name, x + 18, y + 18);
     canvas.setTextSize(1);
-    canvas.setTextColor(5);
+    canvas.setTextColor(0);
     canvas.drawString(detail, x + 18, y + 55);
     canvas.setTextColor(0);
     canvas.drawString(on ? "ON" : "OFF", x + w - 58, y + 20);
@@ -307,7 +309,7 @@ static void renderQuickSettings() {
                btEnabled ? "Controller BT attivo" : "Radio disattivata");
 
     canvas.setTextSize(1);
-    canvas.setTextColor(6);
+    canvas.setTextColor(0);
     canvas.drawString("Tocca un modulo per attivarlo/disattivarlo.", 30, 545);
     canvas.drawString("Swipe up o tocca la status bar per chiudere.", 30, 575);
 
@@ -320,116 +322,103 @@ static void renderNfc() {
 
     canvas.setTextColor(0);
     canvas.setTextSize(2);
-    canvas.drawString("< Home", 22, 83);
+    canvas.drawString("< HOME", 20, 78);
 
     canvas.setTextSize(4);
-    canvas.drawString("NFC Reader", 30, 135);
+    canvas.drawString("NFC TERMINAL", 24, 125);
 
     canvas.setTextSize(1);
-    canvas.setTextColor(6);
-    canvas.drawString(backendName() + String(" • SDA G") + activeNfcSda + " • SCL G" + activeNfcScl + " • RST G" + NFC_RST_PIN, 30, 185);
+    canvas.drawString(backendName() + String("  SDA:G") + activeNfcSda +
+                      "  SCL:G" + activeNfcScl + "  RST:G" + NFC_RST_PIN,
+                      26, 180);
 
-    canvas.fillRect(28, 228, 484, 520, 14);
-    canvas.drawRect(28, 228, 484, 520, 7);
+    canvas.drawLine(24, 210, 516, 210, 0);
 
     if (!nfcEnabled) {
-        canvas.setTextColor(0);
         canvas.setTextSize(3);
-        canvas.drawString("NFC disattivato", 95, 420);
-        canvas.setTextSize(1);
-        canvas.setTextColor(5);
-        canvas.drawString("Riattivalo dalla tendina Quick Settings.", 86, 470);
+        canvas.drawString("> NFC DISABLED", 40, 330);
+        canvas.setTextSize(2);
+        canvas.drawString("Enable NFC from Quick Settings.", 40, 390);
     } else if (!nfcReaderReady) {
-        canvas.setTextColor(0);
         canvas.setTextSize(3);
-        canvas.drawString("Reader NFC non rilevato", 58, 400);
+        canvas.drawString("> READER NOT FOUND", 40, 315);
+        canvas.setTextSize(2);
+        canvas.drawString(nfcDiagnostic, 40, 380);
         canvas.setTextSize(1);
-        canvas.setTextColor(5);
-        canvas.drawString(nfcDiagnostic, 52, 455);
-        canvas.drawString("Vedi Serial Monitor 115200 per il test dettagliato.", 52, 488);
+        canvas.drawString("Serial Monitor: 115200 baud", 40, 430);
     } else if (!lastCard.valid) {
-        canvas.setTextColor(0);
         canvas.setTextSize(3);
-        canvas.drawString("Avvicina un tag", 93, 300);
-        canvas.setTextSize(1);
-        canvas.setTextColor(5);
-        canvas.drawString("MIFARE / NTAG / ISO14443A", 135, 350);
+        canvas.drawString("> WAITING FOR TAG", 38, 235);
+
+        canvas.setTextSize(2);
+        canvas.drawString("MIFARE / NTAG / ISO14443A", 38, 285);
 
         if (nfcBackend == NfcBackend::MFRC522Compat) {
             char d[96];
 
-            canvas.setTextColor(0);
-            snprintf(d, sizeof(d), "Si512: 0x%02X   TX:0x%02X %s",
-                     rfDiag.version, rfDiag.txControl,
+            canvas.setTextSize(2);
+            snprintf(d, sizeof(d), "CHIP       0x%02X  Si512", rfDiag.version);
+            canvas.drawString(d, 38, 350);
+
+            snprintf(d, sizeof(d), "TX         0x%02X  %s",
+                     rfDiag.txControl,
                      ((rfDiag.txControl & 0x03) == 0x03) ? "ON" : "OFF");
-            canvas.drawString(d, 55, 400);
+            canvas.drawString(d, 38, 395);
 
-            snprintf(d, sizeof(d), "RFCfg:0x%02X  RxGain: MAX (48dB)", rfDiag.rfCfg);
-            canvas.drawString(d, 55, 435);
+            snprintf(d, sizeof(d), "RFCFG      0x%02X", rfDiag.rfCfg);
+            canvas.drawString(d, 38, 440);
 
-            snprintf(d, sizeof(d), "WUPA:%d   Error/IRQ:%02X/%02X",
-                     rfDiag.lastWupaStatus, rfDiag.errorReg, rfDiag.comIrq);
-            canvas.drawString(d, 55, 470);
+            snprintf(d, sizeof(d), "WUPA       %d", rfDiag.lastWupaStatus);
+            canvas.drawString(d, 38, 485);
 
-            snprintf(d, sizeof(d), "Status1/2: %02X / %02X",
+            snprintf(d, sizeof(d), "ERR / IRQ  %02X / %02X",
+                     rfDiag.errorReg, rfDiag.comIrq);
+            canvas.drawString(d, 38, 530);
+
+            snprintf(d, sizeof(d), "STAT1/2    %02X / %02X",
                      rfDiag.status1, rfDiag.status2);
-            canvas.drawString(d, 55, 505);
+            canvas.drawString(d, 38, 575);
 
-            snprintf(d, sizeof(d), "RF ADC baseline : %u", rfDiag.adcBaseline);
-            canvas.drawString(d, 55, 540);
+            snprintf(d, sizeof(d), "ADC BASE   %u", rfDiag.adcBaseline);
+            canvas.drawString(d, 38, 620);
 
-            snprintf(d, sizeof(d), "RF ADC corrente : %u", rfDiag.adcCurrent);
-            canvas.drawString(d, 55, 575);
+            snprintf(d, sizeof(d), "ADC NOW    %u", rfDiag.adcCurrent);
+            canvas.drawString(d, 38, 665);
 
-            snprintf(d, sizeof(d), "RF ADC delta    : %+d", rfDiag.adcDelta);
-            canvas.drawString(d, 55, 610);
+            snprintf(d, sizeof(d), "ADC DELTA  %+d", rfDiag.adcDelta);
+            canvas.drawString(d, 38, 710);
 
-            snprintf(d, sizeof(d), "Tentativi/Risposte: %lu / %lu",
+            snprintf(d, sizeof(d), "TRY/RESP   %lu / %lu",
                      (unsigned long)rfDiag.attempts,
                      (unsigned long)rfDiag.responses);
-            canvas.drawString(d, 55, 645);
+            canvas.drawString(d, 38, 755);
 
-            canvas.setTextColor(6);
-            canvas.drawString("Appoggia/togli la card: guarda se ADC/delta cambia.", 55, 685);
-        } else {
-            canvas.drawCircle(270, 535, 56, 6);
-            canvas.drawCircle(270, 535, 38, 6);
-            canvas.drawCircle(270, 535, 20, 6);
+            canvas.setTextSize(1);
+            canvas.drawString("Put/remove card and watch ADC DELTA.", 38, 815);
         }
     } else {
-        canvas.setTextColor(0);
-        canvas.setTextSize(1);
-        canvas.drawString("TYPE", 55, 268);
-        canvas.setTextSize(2);
-        canvas.drawString(lastCard.type, 55, 298);
+        canvas.setTextSize(3);
+        canvas.drawString("> TAG DETECTED", 38, 235);
 
-        canvas.setTextSize(1);
-        canvas.setTextColor(5);
-        canvas.drawString("UID / SERIAL", 55, 365);
-        canvas.setTextColor(0);
         canvas.setTextSize(2);
-        canvas.drawString(uidToString(lastCard.uid, lastCard.uidLength), 55, 398);
+        canvas.drawString("TYPE", 38, 305);
+        canvas.drawString(lastCard.type, 38, 345);
+
+        canvas.drawString("UID", 38, 415);
+        canvas.drawString(uidToString(lastCard.uid, lastCard.uidLength), 38, 455);
 
         char meta[64];
-        snprintf(meta, sizeof(meta), "UID bytes: %u", lastCard.uidLength);
-        canvas.setTextSize(1);
-        canvas.setTextColor(5);
-        canvas.drawString(meta, 55, 452);
+        snprintf(meta, sizeof(meta), "ATQA  0x%04X", lastCard.atqa);
+        canvas.drawString(meta, 38, 535);
 
-        snprintf(meta, sizeof(meta), "ATQA: 0x%04X", lastCard.atqa);
-        canvas.drawString(meta, 55, 495);
+        snprintf(meta, sizeof(meta), "SAK   0x%02X", lastCard.sak);
+        canvas.drawString(meta, 38, 580);
 
-        snprintf(meta, sizeof(meta), "SAK:  0x%02X", lastCard.sak);
-        canvas.drawString(meta, 55, 532);
-
-        canvas.drawLine(55, 580, 485, 580, 10);
-        canvas.setTextColor(0);
-        canvas.drawString("Ultima lettura acquisita correttamente.", 55, 610);
-        canvas.setTextColor(6);
-        canvas.drawString("Il riconoscimento famiglia usa ATQA/SAK.", 55, 648);
+        snprintf(meta, sizeof(meta), "BYTES %u", lastCard.uidLength);
+        canvas.drawString(meta, 38, 625);
     }
 
-    drawFooterHint("UID e metadati vengono stampati anche su USB Serial");
+    drawFooterHint("Swipe down: Quick Settings");
 }
 
 static void fullRefresh() {
@@ -455,29 +444,26 @@ static void bootFrame(int percent, const String &message) {
     canvas.fillCanvas(15);
     canvas.setTextColor(0);
 
-    canvas.setTextSize(5);
-    canvas.drawString("PaperJam", 54, 170);
-    canvas.setTextSize(5);
-    canvas.drawString("OS", 344, 170);
+    canvas.setTextSize(4);
+    canvas.drawString("PAPERJAM OS", 48, 145);
 
-    canvas.setTextSize(1);
-    canvas.setTextColor(5);
-    canvas.drawString(String("v") + PAPERJAM_VERSION + " alpha boot", 58, 240);
-
-    canvas.drawRect(55, 320, 430, 28, 6);
-    int fill = map(constrain(percent, 0, 100), 0, 100, 0, 424);
-    if (fill > 0) canvas.fillRect(58, 323, fill, 22, 4);
-
-    char p[8];
-    snprintf(p, sizeof(p), "%d%%", percent);
-    canvas.setTextColor(0);
     canvas.setTextSize(2);
-    canvas.drawString(p, 238, 370);
+    canvas.drawString(String("VERSION ") + PAPERJAM_VERSION, 50, 215);
+
+    canvas.drawRect(50, 290, 440, 34, 0);
+    int fill = map(constrain(percent, 0, 100), 0, 100, 0, 432);
+    if (fill > 0) canvas.fillRect(54, 294, fill, 26, 0);
+
+    char p[16];
+    snprintf(p, sizeof(p), "%3d%%", percent);
+    canvas.setTextSize(3);
+    canvas.drawString(p, 210, 355);
+
+    canvas.setTextSize(2);
+    canvas.drawString(String("[OK] ") + message, 50, 430);
 
     canvas.setTextSize(1);
-    canvas.drawString("[ OK ] " + message, 58, 440);
-    canvas.setTextColor(6);
-    canvas.drawString("paperjam@m5paper: booting userspace...", 58, 477);
+    canvas.drawString("> booting userspace...", 50, 485);
 
     canvas.pushCanvas(0, 0, percent == 100 ? UPDATE_MODE_GC16 : UPDATE_MODE_DU4);
 }
@@ -1053,7 +1039,7 @@ static void goToSleep() {
     canvas.setTextSize(4);
     canvas.drawString("Sleeping", 130, 390);
     canvas.setTextSize(1);
-    canvas.setTextColor(5);
+    canvas.setTextColor(0);
     canvas.drawString("Press the PWR button to wake PaperJam OS.", 98, 455);
     canvas.pushCanvas(0, 0, UPDATE_MODE_GC16);
 
