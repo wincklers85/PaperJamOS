@@ -408,36 +408,17 @@ static bool initPn532() {
     bool found24 = false;
     bool found28 = false;
 
-    // First try the physical mapping requested by the user:
-    // PN532 SDA -> G33, PN532 SCL -> G26.
-    configureAndProbeBus(33, 26, found24, found28);
+    // First try the requested wiring: PN532 SDA -> G33, SCL -> G26.
+    bool anyAck = configureAndProbeBus(33, 26, found24, found28);
+    activeNfcSda = 33;
+    activeNfcScl = 26;
 
-    if (!found24 && !found28) {
-        // Some HW-147C clone boards have SDA/SCL silkscreen or routing swapped.
+    if (!anyAck) {
+        // Some HW-147C clone boards have SDA/SCL labels/routing swapped.
         serialLog("[i2c2] no ACK, trying SDA/SCL swapped");
-        configureAndProbeBus(26, 33, found24, found28);
-    }
-
-    activeNfcSda = found24 || found28 ? (found24 || found28 ? 
-                   ((probeI2cAddress(0x24) == 0 || probeI2cAddress(0x28) == 0) ? 0 : 0) : 0) : NFC_SDA_PIN;
-
-    // Determine which orientation is currently active without rescanning all addresses.
-    // configureAndProbeBus leaves the last tested bus active.
-    // If the first orientation worked, retry it explicitly so the state is unambiguous.
-    bool first24 = false, first28 = false;
-    configureAndProbeBus(33, 26, first24, first28);
-    if (first24 || first28) {
-        activeNfcSda = 33;
-        activeNfcScl = 26;
-        found24 = first24;
-        found28 = first28;
-    } else {
-        bool swap24 = false, swap28 = false;
-        configureAndProbeBus(26, 33, swap24, swap28);
+        anyAck = configureAndProbeBus(26, 33, found24, found28);
         activeNfcSda = 26;
         activeNfcScl = 33;
-        found24 = swap24;
-        found28 = swap28;
     }
 
     nfcFoundAt28 = found28;
@@ -457,14 +438,14 @@ static bool initPn532() {
     nfcDiagnostic = "PN532 a 0x24 trovato, inizializzazione...";
     serialLog("[nfc] I2C ACK at standard PN532 address 0x24");
 
-    // The bus is already configured on the selected pins. The Seeed begin()
-    // sees the ESP32 I2C controller already initialized and leaves those pins in use.
+    // The ESP32 I2C controller is already initialized on the selected pins.
+    // Seeed PN532_I2C::begin() will leave an already-started bus in place.
     nfc.begin();
     delay(40);
 
     uint32_t version = nfc.getFirmwareVersion();
     if (!version) {
-        // One extra wake-up/retry only; no long boot stall.
+        // One extra wake-up/retry only; avoid long boot stalls.
         pn532Interface.wakeup();
         delay(60);
         version = nfc.getFirmwareVersion();
