@@ -511,7 +511,24 @@ static bool tryRc522CompatibleAt28() {
         return false;
     }
 
+    rc522.PCD_AntennaOff();
+    delay(5);
     rc522.PCD_AntennaOn();
+    rc522.PCD_SetAntennaGain(MFRC522Constants::RxGain_max);
+    delay(10);
+
+    uint8_t txControl = rc522Driver.PCD_ReadRegister(MFRC522Constants::TxControlReg);
+    uint8_t rfCfg = rc522Driver.PCD_ReadRegister(MFRC522Constants::RFCfgReg);
+    Serial.printf("[nfc] TxControlReg=0x%02X RFCfgReg=0x%02X gain=0x%02X\n",
+                  txControl, rfCfg, rc522.PCD_GetAntennaGain());
+
+    if ((txControl & 0x03) != 0x03) {
+        rc522Driver.PCD_WriteRegister(MFRC522Constants::TxControlReg, txControl | 0x03);
+        delay(5);
+        txControl = rc522Driver.PCD_ReadRegister(MFRC522Constants::TxControlReg);
+        Serial.printf("[nfc] forced antenna ON, TxControlReg=0x%02X\n", txControl);
+    }
+
     nfcBackend = NfcBackend::MFRC522Compat;
     nfcDiagnostic = String("Si512/MFRC522 ready @ 0x28 v") + hex2(version);
     return true;
@@ -755,16 +772,34 @@ static void scanPn532() {
 }
 
 static void scanRc522Compatible() {
+    static uint32_t lastRfDiag = 0;
+
     byte atqaBytes[2] = {0, 0};
     byte atqaSize = sizeof(atqaBytes);
 
-    MFRC522::StatusCode request = rc522.PICC_RequestA(atqaBytes, &atqaSize);
+    // WUPA is deliberate here: it also detects a PICC that was left in HALT
+    // after a previous successful read.
+    MFRC522::StatusCode request = rc522.PICC_WakeupA(atqaBytes, &atqaSize);
+
     if (request != MFRC522Constants::STATUS_OK &&
         request != MFRC522Constants::STATUS_COLLISION) {
+
+        if (millis() - lastRfDiag >= 2000) {
+            lastRfDiag = millis();
+            uint8_t txControl = rc522Driver.PCD_ReadRegister(MFRC522Constants::TxControlReg);
+            uint8_t rfCfg = rc522Driver.PCD_ReadRegister(MFRC522Constants::RFCfgReg);
+            Serial.printf("[rf] no tag; WUPA status=%u TxControl=0x%02X RFCfg=0x%02X\n",
+                          (unsigned)request, txControl, rfCfg);
+        }
         return;
     }
 
-    if (!rc522.PICC_ReadCardSerial()) {
+    Serial.printf("[rf] PICC response, ATQA=%02X %02X status=%u\n",
+                  atqaBytes[0], atqaBytes[1], (unsigned)request);
+
+    MFRC522::StatusCode select = rc522.PICC_Select(&rc522.uid);
+    if (select != MFRC522Constants::STATUS_OK) {
+        Serial.printf("[rf] anticollision/select failed status=%u\n", (unsigned)select);
         return;
     }
 
