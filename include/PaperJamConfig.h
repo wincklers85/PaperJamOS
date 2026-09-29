@@ -14,9 +14,10 @@ constexpr int BTN_RIGHT_PIN = 37;
 constexpr int BTN_POWER_PIN = 38;
 constexpr int BTN_LEFT_PIN  = 39;
 
-// PN532 connected to M5Paper Port C and used as a second I2C bus.
-constexpr int NFC_SDA_PIN = 19;
-constexpr int NFC_SCL_PIN = 18;
+// PN532 connected to M5Paper Port B and used as a second I2C bus.
+// User wiring: SDA = GPIO33, SCL = GPIO26.
+constexpr int NFC_SDA_PIN = 33;
+constexpr int NFC_SCL_PIN = 26;
 constexpr uint32_t NFC_I2C_FREQ = 100000;
 
 constexpr uint32_t NFC_SCAN_INTERVAL_MS = 350;
