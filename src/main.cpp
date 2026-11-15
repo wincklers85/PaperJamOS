@@ -10,6 +10,7 @@
 #include <MFRC522DriverI2C.h>
 
 #include "PaperJamConfig.h"
+#include "PaperJamMemory.h"
 
 using namespace PaperJamConfig;
 
@@ -106,6 +107,8 @@ uint32_t lastTouchPoll = 0;
 uint32_t lastUidHash = 0;
 
 NfcCardInfo lastCard;
+String lastDumpStatus = "Tap READ + SAVE to dump memory";
+String lastDumpPath;
 
 static String hex2(uint8_t value) {
     char buf[3];
@@ -433,6 +436,15 @@ static void renderNfc() {
 
         snprintf(meta, sizeof(meta), "BYTES %u", lastCard.uidLength);
         canvas.drawString(meta, 38, 625);
+
+        if (nfcBackend == NfcBackend::MFRC522Compat) {
+            canvas.drawRect(38, 684, 455, 75, UI_BLACK);
+            canvas.setTextSize(2);
+            canvas.drawString("READ + SAVE SD", 74, 703);
+            canvas.setTextSize(1);
+            canvas.drawString(lastDumpStatus, 38, 785);
+            if (lastDumpPath.length()) canvas.drawString(lastDumpPath, 38, 814);
+        }
     }
 
     drawFooterHint("Swipe down: Quick Settings");
@@ -862,6 +874,37 @@ static bool pointIn(int x, int y, int left, int top, int right, int bottom) {
     return x >= left && x <= right && y >= top && y <= bottom;
 }
 
+static void readAndSaveLastCard() {
+    if (!nfcReaderReady || nfcBackend != NfcBackend::MFRC522Compat ||
+        !lastCard.valid) return;
+    lastDumpStatus = "READING...";
+    lastDumpPath = "";
+    fullRefresh();
+    byte atqa[2] = {0}, atqaLen = sizeof(atqa);
+    rc522.PCD_StopCrypto1();
+    auto wake = rc522.PICC_WakeupA(atqa, &atqaLen);
+    auto selected = wake == MFRC522Constants::STATUS_OK
+        ? rc522.PICC_Select(&rc522.uid)
+        : wake;
+    if (selected != MFRC522Constants::STATUS_OK ||
+        rc522.uid.size != lastCard.uidLength ||
+        memcmp(rc522.uid.uidByte, lastCard.uid, lastCard.uidLength) != 0) {
+        lastDumpStatus = "CARD REMOVED / CHANGED";
+        fullRefresh();
+        return;
+    }
+    auto type = rc522.PICC_GetType(rc522.uid.sak);
+    PaperJamMemory::Result result = PaperJamMemory::dump(rc522, type);
+    lastDumpStatus = result.message + " (" + String(result.readBlocks) + " blocks)";
+    lastDumpPath = result.success ? result.path : "";
+    Serial.printf("[memory] %s blocks=%u locked=%u file=%s\n",
+                  result.message.c_str(), (unsigned)result.readBlocks,
+                  (unsigned)result.lockedSectors, result.path.c_str());
+    rc522.PCD_StopCrypto1();
+    rc522.PICC_HaltA();
+    fullRefresh();
+}
+
 static void handleTap(int x, int y) {
     if (y <= STATUS_H) {
         if (currentPage == Page::QuickSettings) closeQuickSettings();
@@ -878,6 +921,10 @@ static void handleTap(int x, int y) {
     }
 
     if (currentPage == Page::NFC) {
+        if (pointIn(x, y, 38, 684, 493, 759) && lastCard.valid) {
+            readAndSaveLastCard();
+            return;
+        }
         if (pointIn(x, y, 0, 58, 155, 125)) {
             currentPage = Page::Home;
             fullRefresh();
@@ -968,6 +1015,10 @@ static void publishCard(const uint8_t *uid, uint8_t uidLength,
     Serial.printf("SAK    : 0x%02X\n", sak);
     Serial.println("-------------------");
 
+    if (changed) {
+        lastDumpStatus = "Tap READ + SAVE to dump memory";
+        lastDumpPath = "";
+    }
     if (changed && currentPage == Page::NFC) {
         fullRefresh();
     }
