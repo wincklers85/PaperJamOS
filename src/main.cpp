@@ -367,7 +367,8 @@ static void renderNfc() {
             char d[96];
 
             canvas.setTextSize(2);
-            snprintf(d, sizeof(d), "CHIP       0x%02X  Si512", rfDiag.version);
+            snprintf(d, sizeof(d), "CHIP  %02X Si512  %s", rfDiag.version,
+                     (rfDiag.control & 0x10) ? "INIT" : "TARGET");
             canvas.drawString(d, 38, 350);
 
             snprintf(d, sizeof(d), "TX         0x%02X  %s",
@@ -375,12 +376,8 @@ static void renderNfc() {
                      ((rfDiag.txControl & 0x03) == 0x03) ? "ON" : "OFF");
             canvas.drawString(d, 38, 395);
 
-            snprintf(d, sizeof(d), "CONTROL    0x%02X  %s", rfDiag.control,
-                     (rfDiag.control & 0x10) ? "INIT" : "TARGET");
-            canvas.drawString(d, 38, 440);
-
             snprintf(d, sizeof(d), "RFCFG      0x%02X", rfDiag.rfCfg);
-            canvas.drawString(d, 38, 465);
+            canvas.drawString(d, 38, 440);
 
             snprintf(d, sizeof(d), "WUPA       %d", rfDiag.lastWupaStatus);
             canvas.drawString(d, 38, 485);
