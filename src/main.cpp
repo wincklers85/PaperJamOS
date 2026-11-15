@@ -73,6 +73,7 @@ bool nfcFoundAt28 = false;
 struct RfDiagnostics {
     uint8_t version = 0;
     uint8_t txControl = 0;
+    uint8_t control = 0;
     uint8_t txAuto = 0;
     uint8_t rfCfg = 0;
     uint8_t errorReg = 0;
@@ -374,8 +375,12 @@ static void renderNfc() {
                      ((rfDiag.txControl & 0x03) == 0x03) ? "ON" : "OFF");
             canvas.drawString(d, 38, 395);
 
-            snprintf(d, sizeof(d), "RFCFG      0x%02X", rfDiag.rfCfg);
+            snprintf(d, sizeof(d), "CONTROL    0x%02X  %s", rfDiag.control,
+                     (rfDiag.control & 0x10) ? "INIT" : "TARGET");
             canvas.drawString(d, 38, 440);
+
+            snprintf(d, sizeof(d), "RFCFG      0x%02X", rfDiag.rfCfg);
+            canvas.drawString(d, 38, 465);
 
             snprintf(d, sizeof(d), "WUPA       %d", rfDiag.lastWupaStatus);
             canvas.drawString(d, 38, 485);
@@ -613,6 +618,7 @@ static void runSi512RfSoftwareSelfTest() {
     rfDiag.adcTxDelta = (int)rfDiag.adcTxOn - (int)rfDiag.adcTxOff;
 
     rfDiag.txControl = rc522Driver.PCD_ReadRegister(MFRC522Constants::TxControlReg);
+    rfDiag.control = rc522Driver.PCD_ReadRegister(MFRC522Constants::ControlReg);
 
     Serial.printf(
         "[si512] RF SELFTEST OFF: ADC=%u S1=%02X  ON: ADC=%u S1=%02X  DELTA=%d\n",
@@ -642,6 +648,21 @@ static bool initSi512Native() {
         uint8_t cmd = rc522Driver.PCD_ReadRegister(MFRC522Constants::CommandReg);
         if ((cmd & 0x10) == 0) break;
         delay(2);
+    }
+
+    // Si512-specific: ControlReg bit 4 selects initiator (reader) mode.
+    // MFRC522-compatible generic init does not set this PN512/Si512 bit.
+    // Preserve the receive RxLastBits status and other register bits.
+    uint8_t control = rc522Driver.PCD_ReadRegister(MFRC522Constants::ControlReg);
+    rc522Driver.PCD_WriteRegister(MFRC522Constants::ControlReg,
+                                  (uint8_t)(control | 0x10));
+    control = rc522Driver.PCD_ReadRegister(MFRC522Constants::ControlReg);
+    rfDiag.control = control;
+    Serial.printf("[si512] ControlReg=0x%02X Initiator=%u\n",
+                  control, (unsigned)((control & 0x10) != 0));
+    if ((control & 0x10) == 0) {
+        serialLog("[si512] ERROR: failed to enable Initiator mode");
+        return false;
     }
 
     // ISO14443A / MIFARE 106 kbit/s.
@@ -996,6 +1017,7 @@ static void scanRc522Compatible() {
     rfDiag.attempts++;
     rfDiag.lastWupaStatus = (int)request;
     rfDiag.txControl = rc522Driver.PCD_ReadRegister(MFRC522Constants::TxControlReg);
+    rfDiag.control = rc522Driver.PCD_ReadRegister(MFRC522Constants::ControlReg);
     rfDiag.txAuto = rc522Driver.PCD_ReadRegister(
         static_cast<MFRC522Constants::PCD_Register>(0x15));
     rfDiag.rfCfg = rc522Driver.PCD_ReadRegister(MFRC522Constants::RFCfgReg);
@@ -1015,8 +1037,9 @@ static void scanRc522Compatible() {
             rfDiag.adcDelta = (int)rfDiag.adcCurrent - (int)rfDiag.adcBaseline;
 
             Serial.printf(
-                "[rf] no tag WUPA=%u TX=0x%02X TxAuto=0x%02X RF=0x%02X Error=0x%02X IRQ=0x%02X Frame=0x%02X ADC=%u delta=%d S1=%02X S2=%02X\n",
+                "[rf] no tag WUPA=%u CONTROL=0x%02X INIT=%u TX=0x%02X TxAuto=0x%02X RF=0x%02X Error=0x%02X IRQ=0x%02X Frame=0x%02X ADC=%u delta=%d S1=%02X S2=%02X\n",
                 (unsigned)request,
+                rfDiag.control, (unsigned)((rfDiag.control & 0x10) != 0),
                 rfDiag.txControl, rfDiag.txAuto, rfDiag.rfCfg,
                 rfDiag.errorReg, rfDiag.comIrq, rfDiag.bitFraming,
                 rfDiag.adcCurrent, rfDiag.adcDelta,
